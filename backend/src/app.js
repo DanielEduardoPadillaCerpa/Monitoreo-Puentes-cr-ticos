@@ -28,7 +28,21 @@ function crearApp() {
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
     maxAge: 600
   }));
+  // Cabeceras de seguridad básicas. Sin HSTS ni upgrade-insecure-requests:
+  // el laboratorio no tiene HTTPS (activarlas sería un pendiente de producción).
+  app.use((req, res, next) => {
+    res.set({
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'same-origin',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
+    });
+    next();
+  });
   app.use('/api/pagos/webhook', express.raw({ type: 'application/json', limit: '64kb' }));
+  // Registro, inicio de sesión y panel de solicitudes: cuerpo máximo de 10 kb.
+  app.use(['/api/auth', '/api/admin/solicitudes'], express.json({ limit: '10kb' }));
   app.use(express.json({ limit: '100kb' }));
   app.use('/img', express.static(path.join(__dirname, '..', 'img')));
 
@@ -51,6 +65,7 @@ function crearApp() {
   app.use('/api/mi-cuenta', require('./routes/miCuenta'));
   app.use('/api/reportes', require('./routes/reportes'));
   app.use('/api/auth', require('./routes/auth').router);
+  app.use('/api/admin/solicitudes', require('./routes/solicitudesRegistro'));
   app.use('/api/verificacion', require('./routes/verificacion'));
   app.use('/api/pedidos', require('./routes/pedidos'));
   app.use('/api/productos', require('./routes/productos'));

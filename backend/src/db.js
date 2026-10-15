@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const configuredConnectionLimit = Number(process.env.DB_CONNECTION_LIMIT);
 const connectionLimit = Number.isSafeInteger(configuredConnectionLimit) && configuredConnectionLimit > 0
   ? Math.min(configuredConnectionLimit, 4)
-  : 4;
+  : 3;
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -14,6 +14,27 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit,
+  connectTimeout: 20000,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  idleTimeout: 60000,
+});
+
+// Pool de una conexión para las transacciones del registro y del inicio de
+// sesión, que se envían como un solo lote (START TRANSACTION … COMMIT) para
+// hacer un solo viaje a MySQL. Las sentencias son fijas y los valores van
+// siempre como parámetros escapados por mysql2: ningún texto del usuario se
+// concatena al SQL. Con el pool principal (3) suma 4 de las 5 conexiones del
+// plan gratuito de Clever Cloud.
+const poolTransacciones = mysql.createPool({
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT || 3306,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 1,
+  multipleStatements: true,
   connectTimeout: 20000,
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
@@ -1272,4 +1293,4 @@ async function sembrarAdminPorDefecto() {
   console.log('==============================================================');
 }
 
-module.exports = { pool, migrar, migrarCuentaSegura, sembrarCategoriasYProductos };
+module.exports = { pool, poolTransacciones, migrar, migrarCuentaSegura, sembrarCategoriasYProductos };

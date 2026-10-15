@@ -20,13 +20,24 @@ jest.mock('../src/auditoria', () => ({
   registrarAuditoria: jest.fn().mockResolvedValue(undefined),
   registrarAuditoriaTransaccional: jest.fn().mockResolvedValue(undefined)
 }));
-jest.mock('../src/mfaCourier', () => ({
-  enviarCodigoMfaN8n: jest.fn().mockResolvedValue(undefined)
+// Los códigos salen por correo directo (nodemailer), nunca por n8n.
+jest.mock('../src/seguridad/correo', () => ({
+  enviarCorreo: jest.fn().mockResolvedValue({ via: 'smtp' }),
+  enviarCorreoEnSegundoPlano: jest.fn(),
+  validarConfiguracionCorreo: jest.fn(),
+  escaparHtml: t => String(t)
+}));
+jest.mock('../src/seguridad/registroVerificado', () => ({
+  procesarRegistro: jest.fn(),
+  insertarRetoMfa: jest.fn().mockResolvedValue(true)
 }));
 
 const { pool } = require('../src/db');
 const { registrarAuditoria, registrarAuditoriaTransaccional } = require('../src/auditoria');
-const { enviarCodigoMfaN8n } = require('../src/mfaCourier');
+const { enviarCorreoEnSegundoPlano } = require('../src/seguridad/correo');
+const { insertarRetoMfa } = require('../src/seguridad/registroVerificado');
+const { crearReto } = require('../src/seguridad/captcha');
+const captcha = () => { const { id, respuesta } = crearReto(); return { captchaId: id, captchaRespuesta: respuesta }; };
 const { cifrar, descifrar } = require('../src/crypto');
 const { hashCodigoMfa } = require('../src/mfaCodes');
 const miCuentaRouter = require('../src/routes/miCuenta');
@@ -36,6 +47,11 @@ const PASSWORD = 'CurrentPassword123!';
 const EMAIL_OLD = 'old@example.test';
 const EMAIL_NEW = 'new@example.test';
 const challengeId = 'a'.repeat(64);
+
+
+// requiereAutenticacion lee de la base session_version, estado_cuenta y rol.
+// Convención de estas pruebas: uid < 10 es administrador; el resto, cliente.
+const filaSesion = (params, extra = {}) => ({ session_version: 0, estado_cuenta: 'activa', rol: Number(params?.[0]) < 10 ? 'admin' : 'cliente', ...extra });
 
 function crearApp(token = crearToken()) {
   const app = express();
@@ -76,9 +92,9 @@ function crearConexion(queryHandler = async () => [{ affectedRows: 1, insertId: 
 }
 
 function configurarSesionVersion(version = 0) {
-  pool.query.mockImplementation(async sql => {
+  pool.query.mockImplementation(async (sql, params) => {
     if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) {
-      return [[{ session_version: version }], []];
+      return [[filaSesion([10], { session_version: version })], []];
     }
     return [{ affectedRows: 1 }, []];
   });
@@ -103,6 +119,8 @@ beforeEach(() => {
   pool.getConnection.mockReset();
   registrarAuditoria.mockClear();
   registrarAuditoriaTransaccional.mockClear();
+  enviarCorreoEnSegundoPlano.mockClear();
+  insertarRetoMfa.mockClear();
   configurarSesionVersion();
 });
 
@@ -119,7 +137,7 @@ describe('API autenticada de mi cuenta', () => {
 
   test('GET devuelve únicamente el perfil asociado al cliente del JWT', async () => {
     pool.query.mockImplementation(async (sql, params) => {
-      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[{ session_version: 0 }], []];
+      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[filaSesion(params)], []];
       return [[{
         id: 7,
         nombre_funcionario: 'Nombre propio',
@@ -209,122 +227,69 @@ describe('API autenticada de mi cuenta', () => {
 describe('cambio de correo con verificación MFA', () => {
   test('el inicio de sesión acepta el correo nuevo y vuelve a solicitar MFA', async () => {
     const passwordHash = await bcrypt.hash(PASSWORD, 4);
-    const connection = crearConexion(async () => [{ affectedRows: 1 }, []]);
     pool.query.mockImplementation(async (sql, params) => {
-      if (/SELECT \* FROM usuarios WHERE correo = \?/i.test(String(sql))) {
+      if (/FROM usuarios WHERE correo = \?/i.test(String(sql))) {
         expect(params).toEqual([EMAIL_NEW]);
-        return [[{
-          id: 10,
-          correo: EMAIL_NEW,
-          password_hash: passwordHash,
-          cliente_id: 7,
-          rol: 'cliente',
-          session_version: 1
-        }], []];
-      }
-      if (/SELECT COUNT\(\*\) AS cantidad/i.test(String(sql))) {
-        return [[{ cantidad: 0 }], []];
+        return [[{ id: 10, correo: EMAIL_NEW, password_hash: passwordHash, estado_cuenta: 'activa' }], []];
       }
       return [{ affectedRows: 1 }, []];
     });
 
     const response = await request(crearAppAutenticacion())
       .post('/api/auth/login')
-      .send({ correo: EMAIL_NEW, password: PASSWORD });
+      .send({ correo: EMAIL_NEW, password: PASSWORD, ...captcha() });
 
     expect(response.status).toBe(202);
     expect(response.body.mfaRequired).toBe(true);
-    expect(connection.commit).toHaveBeenCalledTimes(1);
+    expect(insertarRetoMfa).toHaveBeenCalledTimes(1);
   });
 
-  test('el login conserva retos ante 5xx ambiguos y rechaza 403 del webhook', async () => {
+  test('el código MFA se envía por correo directo, en segundo plano y nunca a n8n', async () => {
     const passwordHash = await bcrypt.hash(PASSWORD, 4);
-    crearConexion(async () => [{ affectedRows: 1 }, []]);
     pool.query.mockImplementation(async sql => {
-      if (/SELECT \* FROM usuarios WHERE correo = \?/i.test(String(sql))) {
-        return [[{
-          id: 10,
-          correo: EMAIL_NEW,
-          password_hash: passwordHash,
-          cliente_id: 7,
-          rol: 'cliente',
-          session_version: 1
-        }], []];
+      if (/FROM usuarios WHERE correo = \?/i.test(String(sql))) {
+        return [[{ id: 10, correo: EMAIL_NEW, password_hash: passwordHash, estado_cuenta: 'activa' }], []];
       }
-      if (/SELECT COUNT\(\*\) AS cantidad/i.test(String(sql))) return [[{ cantidad: 0 }], []];
-      if (/DELETE FROM retos_mfa/i.test(String(sql))) return [{ affectedRows: 1 }, []];
       return [{ affectedRows: 1 }, []];
     });
-    const errorAnterior = console.error;
-    const logs = [];
-    console.error = (...args) => logs.push(args);
+    const fetchAnterior = global.fetch;
+    global.fetch = jest.fn();
     try {
-      for (const status of [403, 502, 503]) {
-        pool.query.mockClear();
-        enviarCodigoMfaN8n.mockRejectedValueOnce(Object.assign(new Error('N8N_MFA_DELIVERY_REJECTED'), {
-          code: `N8N_MFA_HTTP_${status}`
-        }));
-        const response = await request(crearAppAutenticacion())
-          .post('/api/auth/login')
-          .send({ correo: EMAIL_NEW, password: PASSWORD });
+      const response = await request(crearAppAutenticacion())
+        .post('/api/auth/login')
+        .send({ correo: EMAIL_NEW, password: PASSWORD, ...captcha() });
 
-        if (status === 403) {
-          expect(response.status).toBe(422);
-          expect(response.body).toEqual({
-            success: false,
-            message: 'El servicio de verificación temporal no se encuentra disponible. Por favor, intente más tarde.'
-          });
-          expect(pool.query.mock.calls.some(([sql]) => /DELETE FROM retos_mfa/i.test(String(sql)))).toBe(true);
-        } else {
-          expect(response.status).toBe(202);
-          expect(response.body).toMatchObject({
-            mfaRequired: true,
-            deliveryUnconfirmed: true
-          });
-          expect(response.body.challengeId).toMatch(/^[a-f0-9]{64}$/);
-          expect(pool.query.mock.calls.some(([sql]) => /DELETE FROM retos_mfa/i.test(String(sql)))).toBe(false);
-        }
-        expect(JSON.stringify(response.body)).not.toContain(`N8N_MFA_HTTP_${status}`);
-      }
-      expect(JSON.stringify(logs)).toContain('N8N_MFA_HTTP_403');
-      expect(JSON.stringify(logs)).toContain('N8N_MFA_HTTP_502');
-      expect(JSON.stringify(logs)).toContain('N8N_MFA_HTTP_503');
+      expect(response.status).toBe(202);
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(enviarCorreoEnSegundoPlano).toHaveBeenCalledTimes(1);
+      const [mensaje] = enviarCorreoEnSegundoPlano.mock.calls[0];
+      expect(mensaje.to).toBe(EMAIL_NEW);
+      expect(mensaje.text).toMatch(/\b\d{6}\b/);
+      // Solo el HMAC del código llega a la base.
+      const [{ codigoHash }] = insertarRetoMfa.mock.calls[0];
+      expect(codigoHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(mensaje.text).not.toContain(codigoHash);
+      expect(JSON.stringify(response.body)).not.toMatch(/\b\d{6}\b/);
     } finally {
-      console.error = errorAnterior;
+      global.fetch = fetchAnterior;
     }
   });
 
-  test('un reenvío MFA con respuesta 502 mantiene vigente el reto y su código nuevo', async () => {
+  test('el reenvío MFA genera un código nuevo y lo envía por correo', async () => {
     pool.query.mockImplementation(async sql => {
       if (/SELECT r\.usuario_id, r\.estado/i.test(String(sql))) {
-        return [[{
-          usuario_id: 10,
-          estado: 'pendiente',
-          vigente: 1,
-          puede_reenviar: 1,
-          quedan_reenvios: 1,
-          correo: EMAIL_NEW
-        }], []];
+        return [[{ usuario_id: 10, estado: 'pendiente', vigente: 1, puede_reenviar: 1, quedan_reenvios: 1, correo: EMAIL_NEW }], []];
       }
       if (/UPDATE retos_mfa\s+SET codigo_hash/i.test(String(sql))) return [{ affectedRows: 1 }, []];
       return [{ affectedRows: 1 }, []];
     });
-    enviarCodigoMfaN8n.mockRejectedValueOnce(Object.assign(new Error('N8N_MFA_DELIVERY_REJECTED'), {
-      code: 'N8N_MFA_HTTP_502'
-    }));
-    const errorAnterior = console.error;
-    console.error = () => {};
-    try {
-      const response = await request(crearAppAutenticacion())
-        .post('/api/auth/mfa/reenviar')
-        .send({ challengeId });
+    const response = await request(crearAppAutenticacion())
+      .post('/api/auth/mfa/reenviar')
+      .send({ challengeId });
 
-      expect(response.status).toBe(200);
-      expect(response.body).toMatchObject({ ok: true, deliveryUnconfirmed: true });
-      expect(pool.query.mock.calls.some(([sql]) => /SET estado = 'cancelado'/i.test(String(sql)))).toBe(false);
-    } finally {
-      console.error = errorAnterior;
-    }
+    expect(response.status).toBe(200);
+    expect(response.body.ok).toBe(true);
+    expect(enviarCorreoEnSegundoPlano).toHaveBeenCalledWith(expect.objectContaining({ to: EMAIL_NEW }));
   });
 
   test('solicitar cambio requiere contraseña actual y no inicia consulta de correo sin ella', async () => {
@@ -358,7 +323,7 @@ describe('cambio de correo con verificación MFA', () => {
     expect(connection.query.mock.calls.some(([sql]) => /INSERT INTO retos_mfa/i.test(String(sql)))).toBe(false);
   });
 
-  test('la solicitud guarda código/correo cifrados y encola solo el evento autorizado', async () => {
+  test('la solicitud guarda el correo cifrado y envía el código por correo directo (nada a n8n)', async () => {
     const passwordHash = await bcrypt.hash(PASSWORD, 4);
     const inserts = [];
     const connection = crearConexion(async (sql, params) => {
@@ -385,11 +350,11 @@ describe('cambio de correo con verificación MFA', () => {
     expect(response.body.challengeId).toMatch(/^[a-f0-9]{64}$/);
     const reto = inserts.find(item => /INSERT INTO retos_mfa/i.test(item.sql));
     expect(reto.params[4]).not.toBe(EMAIL_NEW);
-    const outbox = inserts.find(item => /INSERT IGNORE INTO automation_outbox/i.test(item.sql));
-    expect(outbox.sql).toMatch(/payload_cifrado/);
-    expect(outbox.params[0]).toBe(`mfa-email-change:${response.body.challengeId}`);
-    expect(outbox.params[1]).not.toContain(EMAIL_NEW);
-    expect(outbox.params[1]).not.toMatch(/\d{6}/);
+    expect(inserts.some(item => /automation_outbox/i.test(item.sql))).toBe(false);
+    expect(enviarCorreoEnSegundoPlano).toHaveBeenCalledTimes(1);
+    const [mensaje] = enviarCorreoEnSegundoPlano.mock.calls[0];
+    expect(mensaje.to).toBe(EMAIL_NEW);
+    expect(mensaje.text).toMatch(/\b\d{6}\b/);
     expect(connection.commit).toHaveBeenCalledTimes(1);
   });
 
@@ -415,7 +380,7 @@ describe('cambio de correo con verificación MFA', () => {
     }
   });
 
-  test('confirmar sincroniza ambos correos, revoca sesiones, encola aviso y audita solo el campo', async () => {
+  test('confirmar sincroniza ambos correos, revoca sesiones, avisa al correo anterior y audita solo el campo', async () => {
     const consultas = [];
     const connection = crearConexion(async (sql, params) => {
       consultas.push({ sql: String(sql), params });
@@ -433,8 +398,8 @@ describe('cambio de correo con verificación MFA', () => {
     expect(updateUsuario.params[0]).toBe(EMAIL_NEW);
     expect(updateCliente.params[0]).not.toBe(EMAIL_NEW);
     expect(consultas.some(item => /UPDATE refresh_tokens SET revocado = TRUE/i.test(item.sql))).toBe(true);
-    const outbox = consultas.find(item => /INSERT IGNORE INTO automation_outbox/i.test(item.sql));
-    expect(outbox.params[1]).not.toContain(EMAIL_OLD);
+    expect(consultas.some(item => /automation_outbox/i.test(item.sql))).toBe(false);
+    expect(enviarCorreoEnSegundoPlano).toHaveBeenCalledWith(expect.objectContaining({ to: datosReto().correo_anterior }));
     expect(registrarAuditoriaTransaccional).toHaveBeenCalledWith(connection, expect.objectContaining({
       detalle: { campos: ['correo'] },
       usuario: { uid: 10, correo: null }
@@ -558,8 +523,8 @@ describe('contraseña, sesiones y privacidad', () => {
   });
 
   function mockStaff(permisos) {
-    pool.query.mockImplementation(async sql => {
-      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[{ session_version: 0 }], []];
+    pool.query.mockImplementation(async (sql, params) => {
+      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[filaSesion(params)], []];
       if (/FROM usuarios u\s+LEFT JOIN clientes/i.test(String(sql))) return [[{ id: 1, rol: 'admin', es_superadmin: 0 }], []];
       if (/FROM staff_permisos/i.test(String(sql))) return [permisos.map(permiso => ({ permiso })), []];
       return [{ affectedRows: 1 }, []];
@@ -591,8 +556,8 @@ describe('contraseña, sesiones y privacidad', () => {
   });
 
   test('con contraseña inicial pendiente solo se permite cambiarla', async () => {
-    pool.query.mockImplementation(async sql => {
-      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[{ session_version: 0, debe_cambiar_password: 1 }], []];
+    pool.query.mockImplementation(async (sql, params) => {
+      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[filaSesion(params, { debe_cambiar_password: 1 })], []];
       return [[], []];
     });
     const token = crearToken();

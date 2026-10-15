@@ -121,13 +121,22 @@ test('configuración segura: en producción rechaza secretos de ejemplo', () => 
   try {
     process.env.JWT_SECRET = 'cambia-este-secreto-con-texto-suficientemente-largo';
     process.env.MFA_TOKEN_PEPPER = crypto.randomBytes(32).toString('hex');
+    process.env.ENC_KEY = crypto.randomBytes(32).toString('hex');
+    process.env.HMAC_KEY = crypto.randomBytes(32).toString('hex');
     assert.throws(() => validarConfiguracionSegura({ produccion: true }), /JWT_SECRET/);
     process.env.JWT_SECRET = crypto.randomBytes(32).toString('hex');
     assert.doesNotThrow(() => validarConfiguracionSegura({ produccion: true }));
+    // Registro verificado: claves ausentes o iguales impiden arrancar en cualquier entorno.
+    process.env.HMAC_KEY = process.env.ENC_KEY;
+    assert.throws(() => validarConfiguracionSegura({ produccion: false }), /distintas/);
+    delete process.env.ENC_KEY;
+    assert.throws(() => validarConfiguracionSegura({ produccion: false }), /ENC_KEY/);
+    process.env.ENC_KEY = crypto.randomBytes(32).toString('hex');
+    process.env.HMAC_KEY = crypto.randomBytes(32).toString('hex');
     process.env.CRYPTO_KEYS = 'k1:corta';
     assert.throws(() => validarConfiguracionSegura({ produccion: true }), /CRYPTO_KEYS/);
   } finally {
-    for (const clave of ['JWT_SECRET', 'MFA_TOKEN_PEPPER', 'CRYPTO_KEYS']) {
+    for (const clave of ['JWT_SECRET', 'MFA_TOKEN_PEPPER', 'CRYPTO_KEYS', 'ENC_KEY', 'HMAC_KEY']) {
       if (respaldo[clave] === undefined) delete process.env[clave]; else process.env[clave] = respaldo[clave];
     }
   }

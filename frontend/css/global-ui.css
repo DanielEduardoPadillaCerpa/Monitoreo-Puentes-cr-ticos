@@ -15,7 +15,7 @@
   --gl-soft: #6b7b90;
   --gl-line: rgba(11, 45, 74, .12);
   --gl-hero-img: url("http://localhost:8081/img/image_62125725.jpg");
-  --gl-police-img: url("http://localhost:8081/img/image_ef634cec.jpg");
+  --gl-police-img: url("http://localhost:8081/img/Imagen%20del%20Landing.png");
 }
 
 /* ---------- FONDO GENERAL ---------- */
@@ -375,4 +375,23 @@ body.gl-cart-open #chatbot-panel { display: none !important; }
 @media (max-width: 575.98px) {
   #chatbot-panel { right: 12px; left: 12px; width: auto; max-width: none; bottom: 92px; }
   #chatbot-toggle { right: 16px; bottom: 16px; }
+}
+
+/* ---------- SIN BARRA HORIZONTAL ----------
+   Ninguna página se desplaza en el eje X ("clip" no rompe los elementos sticky). */
+html, body { overflow-x: hidden; overflow-x: clip; }
+
+/* Con sesión de administrador, el menú público suma enlaces (Regresar al panel,
+   Nuevo cliente, Historial y Reportes de clientes) y no cabía en el contenedor
+   de 1240 px. Solo en ese caso, el menú usa el ancho de la pantalla y ajusta los
+   espacios; visitantes y clientes lo ven igual que siempre. */
+@media (min-width: 1200px) {
+  body[data-rol="admin"] nav.navbar-institucional[data-global] > .container { max-width: none; padding-left: 1.5rem; padding-right: 1.5rem; }
+  body[data-rol="admin"] nav.navbar-institucional[data-global] .navbar-nav { column-gap: 0 !important; gap: 0 !important; }
+  body[data-rol="admin"] nav.navbar-institucional[data-global] .nav-link { padding: .5rem .5rem !important; }
+  body[data-rol="admin"] nav.navbar-institucional[data-global] .nav-search { width: 150px !important; }
+  body[data-rol="admin"] nav.navbar-institucional[data-global] .navbar-brand { margin-right: 1rem !important; }
+}
+@media (min-width: 1800px) {
+  body[data-rol="admin"] nav.navbar-institucional[data-global] .navbar-nav { column-gap: .75rem !important; }
 }

@@ -182,7 +182,7 @@ body.landing-page .landing-hero {
     background-color: #071d37;
     background-image:
         linear-gradient(90deg, rgba(7,29,55,.88) 0%, rgba(7,29,55,.60) 45%, rgba(7,29,55,.25) 100%),
-        url("http://localhost:8081/img/image_ef634cec.jpg");
+        url("http://localhost:8081/img/Imagen%20del%20Landing.png");
     background-size: cover;
     background-position: center top;
     background-repeat: no-repeat;
@@ -330,91 +330,103 @@ body.landing-page .seccion-titulo::after {
     border-radius: 3px;
 }
 
-/* ---------- INDUSTRIAS ---------- */
-body.landing-page .row.industrias-grid { gap: 0 !important; }
-body.landing-page .industria-item { position: relative; padding-bottom: 20px; }
+/* ---------- INDUSTRIAS ----------
+   Tarjeta = un solo enlace. La banda verde ("Nombre · Explorar →") se
+   superpone al 25 % inferior de la imagen; la imagen se funde hacia ella. */
 body.landing-page .industria-card {
     position: relative;
-    display: flex;
-    align-items: flex-end;
-    width: 100%;
-    aspect-ratio: 4 / 4.6;
-    min-height: 220px;
-    overflow: hidden;
+    display: block;
+    height: 100%;
+    padding: 10px;
     text-decoration: none;
-    background: #172b45;
+    background: #fff;
     border: 0 !important;
-    border-radius: 18px !important;
+    border-radius: 24px !important;
     box-shadow: var(--lp-shadow-md);
+    transition: transform .3s ease, box-shadow .3s ease;
 }
-body.landing-page .industria-card.image-missing { background: linear-gradient(135deg, #0b2a4d, #183c64); }
-body.landing-page .industria-card img {
+body.landing-page .industria-media {
+    position: relative;
+    display: block;
+    aspect-ratio: 4 / 5;
+    overflow: hidden;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #0b2a4d, #183c64);
+    isolation: isolate;
+}
+body.landing-page .industria-media img {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
+    object-position: center top;
     transition: transform .5s ease;
 }
-body.landing-page .industria-card::after {
+/* Fundido de la imagen hacia la banda verde. */
+body.landing-page .industria-media::after {
     content: "";
     position: absolute;
-    inset: 0;
+    inset: auto 0 25% 0;
+    height: 30%;
     z-index: 1;
-    background: linear-gradient(180deg, rgba(7,29,55,0) 35%, rgba(7,29,55,.88) 100%);
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(0, 176, 96, 0) 0%, rgba(0, 150, 80, .45) 100%);
 }
-body.landing-page .industria-texto {
-    position: relative;
+body.landing-page .industria-banda {
+    position: absolute;
+    inset: auto 0 0 0;
     z-index: 2;
-    display: block;
-    height: auto;
-    padding: 20px 20px 34px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .3rem;
+    height: 25%;
+    min-height: 64px;
+    padding: .5rem 1rem;
+    overflow: hidden;
     color: #fff;
-    font-size: 1.2rem;
+    text-align: center;
+    background: linear-gradient(135deg, #009a53 0%, #00b060 55%, #13c46c 100%);
+    font-family: "Inter", sans-serif;
     font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
     line-height: 1.1;
-    letter-spacing: .02em;
 }
-body.landing-page .industria-item:hover .industria-card {
+/* Líneas diagonales de luz, como en la referencia. */
+body.landing-page .industria-banda::before,
+body.landing-page .industria-banda::after {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    width: 140%;
+    height: 1px;
+    background: rgba(255, 255, 255, .22);
+    transform: rotate(-24deg);
+    pointer-events: none;
+}
+body.landing-page .industria-banda::before { left: -70%; top: 50%; }
+body.landing-page .industria-banda::after { right: -80%; top: 30%; }
+body.landing-page .industria-texto { font-size: clamp(.95rem, .85rem + .4vw, 1.2rem); background: none !important; padding: 0; color: #fff; }
+body.landing-page .industria-accion {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    font-size: clamp(.78rem, .72rem + .25vw, .92rem);
+    opacity: .95;
+}
+body.landing-page .industria-accion .flecha { display: inline-block; font-size: 1.25em; transition: transform .25s ease; }
+body.landing-page .industria-card:hover,
+body.landing-page .industria-card:focus-visible {
     transform: translateY(-4px);
     box-shadow: var(--lp-shadow-lg);
 }
-body.landing-page .industria-item:hover .industria-card img { transform: scale(1.07); }
-
-body.landing-page .btn-industria {
-    position: absolute;
-    bottom: -15px;
-    left: 50%;
-    z-index: 5;
-    transform: translateX(-50%);
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: .6rem 1.4rem;
-    white-space: nowrap;
-    font-family: "Inter", sans-serif;
-    font-size: .74rem;
-    font-weight: 700;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    text-decoration: none;
-    color: var(--lp-navy);
-    background: linear-gradient(135deg, #00e676, #00c853);
-    border: 2px solid #fff;
-    border-radius: 999px;
-    box-shadow: 0 8px 20px rgba(11,35,64,.25);
-    transition: transform .25s ease, background .25s ease, color .25s ease, box-shadow .25s ease;
-}
-body.landing-page .btn-industria .flecha { display: inline-block; transition: transform .25s ease; }
-body.landing-page .btn-industria:hover,
-body.landing-page .industria-item:hover .btn-industria {
-    background: var(--lp-navy) !important;
-    color: #fff !important;
-    transform: translateX(-50%) translateY(-3px);
-    box-shadow: 0 14px 28px rgba(11,35,64,.35);
-}
-body.landing-page .btn-industria:hover .flecha,
-body.landing-page .industria-item:hover .btn-industria .flecha { transform: translateX(4px); }
+body.landing-page .industria-card:focus-visible { outline: 3px solid #00b060; outline-offset: 3px; }
+body.landing-page .industria-card:hover .industria-media img { transform: scale(1.06); }
+body.landing-page .industria-card:hover .industria-banda { background: linear-gradient(135deg, #0b2d4a 0%, #0f4a52 55%, #00a058 100%); }
+body.landing-page .industria-card:hover .industria-accion .flecha { transform: translateX(5px); }
 
 /* ---------- PRODUCTOS POPULARES ---------- */
 body.landing-page .productos-populares { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
@@ -588,7 +600,7 @@ body.landing-page .footer-bottom span:last-child {
     body.landing-page .landing-hero p.lead { font-size: 1.02rem; }
     body.landing-page .landing-hero .d-flex .btn { flex: 1 1 100%; text-align: center; }
     body.landing-page .beneficios-section { margin-top: -44px; }
-    body.landing-page .industria-card { aspect-ratio: 16 / 10; }
+    body.landing-page .industria-media { aspect-ratio: 4 / 3.4; }
     body.landing-page .productos-populares { grid-template-columns: 1fr; }
     body.landing-page .footer-nuevo { border-radius: 20px 20px 0 0; }
 }
@@ -696,43 +708,51 @@ body.landing-page .footer-bottom span:last-child {
   <div class="row g-4 industrias-grid">
 
     <div class="col-12 col-sm-6 col-lg-3">
-      <div class="industria-item">
-        <a href="index.html" class="industria-card">
-          <img src="http://localhost:8081/img/camufajeSelva.jpg" alt="Camuflaje Selva" onerror="this.style.display='none'; this.parentElement.classList.add('image-missing');">
-          <span class="industria-texto">CAMUFLAJE<br>SELVA</span>
-        </a>
-        <a href="index.html" class="btn-industria">Explorar <span class="flecha">→</span></a>
-      </div>
+      <a href="index.html" class="industria-card" aria-label="Explorar camuflaje selva">
+        <span class="industria-media">
+          <img src="http://localhost:8081/img/camufajeSelva.jpg" alt="Camuflaje Selva" loading="lazy" onerror="this.remove();">
+          <span class="industria-banda">
+            <span class="industria-texto">Camuflaje selva</span>
+            <span class="industria-accion">Explorar <span class="flecha" aria-hidden="true">→</span></span>
+          </span>
+        </span>
+      </a>
     </div>
 
     <div class="col-12 col-sm-6 col-lg-3">
-      <div class="industria-item">
-        <a href="index.html" class="industria-card">
-          <img src="http://localhost:8081/img/gala.jpg" alt="Gala" onerror="this.style.display='none'; this.parentElement.classList.add('image-missing');">
-          <span class="industria-texto">GALA</span>
-        </a>
-        <a href="index.html" class="btn-industria">Explorar <span class="flecha">→</span></a>
-      </div>
+      <a href="index.html" class="industria-card" aria-label="Explorar gala">
+        <span class="industria-media">
+          <img src="http://localhost:8081/img/gala.jpg" alt="Gala" loading="lazy" onerror="this.remove();">
+          <span class="industria-banda">
+            <span class="industria-texto">Gala</span>
+            <span class="industria-accion">Explorar <span class="flecha" aria-hidden="true">→</span></span>
+          </span>
+        </span>
+      </a>
     </div>
 
     <div class="col-12 col-sm-6 col-lg-3">
-      <div class="industria-item">
-        <a href="index.html" class="industria-card">
-          <img src="http://localhost:8081/img/Antidisturbios.jpg" alt="Antidisturbios" onerror="this.style.display='none'; this.parentElement.classList.add('image-missing');">
-          <span class="industria-texto">ANTIDISTURBIOS</span>
-        </a>
-        <a href="index.html" class="btn-industria">Explorar <span class="flecha">→</span></a>
-      </div>
+      <a href="index.html" class="industria-card" aria-label="Explorar antidisturbios">
+        <span class="industria-media">
+          <img src="http://localhost:8081/img/Antidisturbios.jpg" alt="Antidisturbios" loading="lazy" onerror="this.remove();">
+          <span class="industria-banda">
+            <span class="industria-texto">Antidisturbios</span>
+            <span class="industria-accion">Explorar <span class="flecha" aria-hidden="true">→</span></span>
+          </span>
+        </span>
+      </a>
     </div>
 
     <div class="col-12 col-sm-6 col-lg-3">
-      <div class="industria-item">
-        <a href="index.html" class="industria-card">
-          <img src="http://localhost:8081/img/Armada.jpg" alt="Armada" onerror="this.style.display='none'; this.parentElement.classList.add('image-missing');">
-          <span class="industria-texto">ARMADA</span>
-        </a>
-        <a href="index.html" class="btn-industria">Explorar <span class="flecha">→</span></a>
-      </div>
+      <a href="index.html" class="industria-card" aria-label="Explorar armada">
+        <span class="industria-media">
+          <img src="http://localhost:8081/img/Armada.jpg" alt="Armada" loading="lazy" onerror="this.remove();">
+          <span class="industria-banda">
+            <span class="industria-texto">Armada</span>
+            <span class="industria-accion">Explorar <span class="flecha" aria-hidden="true">→</span></span>
+          </span>
+        </span>
+      </a>
     </div>
 
   </div>

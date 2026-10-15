@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-10-15: registro verificado, aprobación del administrador y MFA sin n8n
+
+### Agregado
+- Registro con nombre completo, NIT, institución, correo, contraseña y captcha propio (SVG con trazos, un solo uso). La terna NIT + nombre + institución se verifica contra el padrón y la solicitud queda pendiente; la respuesta es siempre 202 genérica.
+- Padrón cifrado `padron_institucional` (NIT como índice HMAC, nombre y entidad con AES-256-GCM y AAD), sincronizado desde `PADRON_DB_URI` al arrancar y cada 10 minutos (`npm run padron:importar`).
+- Panel **Solicitudes** (`admin-solicitudes.html`): lista sin NIT ni nombre, detalle con el padrón al lado y verificación repetida, aprobación atómica (confirmación explícita si no coincide) y rechazo con motivo; contador en el menú de todos los paneles.
+- Migración `003_registro_verificado` (`usuarios.estado_cuenta`, `padron_institucional`, `solicitudes_registro`) y SQL idempotente en `backend/sql/`.
+- Scripts `generar-claves.js`, `importar-padron.js` y `medir-rendimiento.js`; workflow n8n W12 (avisos firmados `{evento, solicitud_id, resultado}`).
+- Pruebas `test/registro-verificado.test.js` (cifrado, normalización, padrón, captcha, firma n8n y flujo completo).
+
+### Cambiado
+- Sin acceso hasta que un administrador apruebe. El login compara contra un hash de relleno si el correo no existe e informa el estado de la cuenta solo tras validar la contraseña.
+- El middleware lee `estado_cuenta` y `rol` de la base en cada petición.
+- Los códigos MFA, de autorización de compra y de cambio de correo, los comprobantes y los avisos de seguridad se envían con nodemailer (consola en laboratorio sin SMTP); ya no pasan por n8n (W5 y W9 quedan sin uso).
+- Registro, login, aprobar y rechazar agrupados en lotes de un solo viaje a MySQL; pool de 3 conexiones; límite de cuerpo de 10 kb en autenticación y panel; cabeceras de seguridad (sin HSTS).
+- Banner de la portada y fondo de los paneles con la imagen de todas las instituciones.
+
+### Pendiente
+- Ver `docs/REGISTRO_VERIFICADO.md` §8: HTTPS, captcha y SMTP reales, gestor de secretos, decidir sobre el NIT que W11 envía a n8n y rotar la contraseña de la base del padrón.
+
 ## 2026-10-13 (tarde): registro mínimo y verificación en la compra
 
 ### Agregado

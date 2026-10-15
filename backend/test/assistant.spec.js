@@ -69,6 +69,11 @@ const catalogo = {
 };
 
 let contadorIp = 1;
+
+// requiereAutenticacion lee de la base session_version, estado_cuenta y rol.
+// Convención de estas pruebas: uid < 10 es administrador; el resto, cliente.
+const filaSesion = (params, extra = {}) => ({ session_version: 0, estado_cuenta: 'activa', rol: Number(params?.[0]) < 10 ? 'admin' : 'cliente', ...extra });
+
 function clienteApi(router) {
   const app = express();
   app.set('trust proxy', 1);
@@ -99,14 +104,14 @@ function conSesionInstitucional(solicitud) {
 
 // Contexto de autorización leído de MySQL: cuenta de Policía aprobada.
 const CONTEXTO_POLICIA_APROBADO = {
-  id: 7, rol: 'cliente', cliente_id: 7, correo_verificado_en: new Date(),
+  id: 7, rol: 'cliente', cliente_id: 7, estado_cuenta: 'activa', correo_verificado_en: new Date(),
   estado_verificacion: 'aprobado', institucion_aprobada: 'policia', tipo_institucion: 'policia', autorizacion_general: 0
 };
 
 beforeEach(() => {
   indice.obtenerIndice.mockResolvedValue(catalogo);
-  pool.query.mockReset().mockImplementation(async sql => {
-    if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[{ session_version: 0 }], []];
+  pool.query.mockReset().mockImplementation(async (sql, params) => {
+    if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[filaSesion(params)], []];
     if (/FROM usuarios u\s+LEFT JOIN clientes c/i.test(String(sql))) return [[CONTEXTO_POLICIA_APROBADO], []];
     return [{ insertId: 1, affectedRows: 1 }, []];
   });
@@ -308,8 +313,8 @@ describe('API del asistente y aislamiento de datos', () => {
   describe('autocompletado seguro del perfil de checkout', () => {
     test('perfil checkout requiere JWT, usa solo clienteId autenticado y responde no-store', async () => {
       const token = jwt.sign({ uid: 10, clienteId: 7, mfa: true }, process.env.JWT_SECRET);
-      pool.query.mockImplementation(async sql => {
-        if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[{ session_version: 0 }], []];
+      pool.query.mockImplementation(async (sql, params) => {
+        if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[filaSesion(params)], []];
         return [[
           {
             id: 7,
@@ -439,7 +444,7 @@ describe('API del asistente y aislamiento de datos', () => {
     const token = jwt.sign({ uid: 10, clienteId: 7, mfa: true }, process.env.JWT_SECRET);
     pool.query.mockImplementation(async (sql, params) => {
       if (/SELECT session_version[^;]*FROM usuarios/.test(String(sql))) {
-        return [[{ session_version: 0 }], []];
+        return [[filaSesion([10])], []];
       }
       if (String(sql).includes('WHERE cliente_id = ?')) {
         const pedidos = [

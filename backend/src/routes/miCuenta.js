@@ -9,6 +9,7 @@ const { hashCodigoMfa, compararHashesMfa, generarCodigoMfa } = require('../mfaCo
 const { requiereAutenticacion, requiereAdmin } = require('./auth');
 const { requierePermiso } = require('../autorizacion');
 const { registrarAuditoria, registrarAuditoriaTransaccional } = require('../auditoria');
+const { enviarCorreoEnSegundoPlano } = require('../seguridad/correo');
 
 const router = express.Router();
 const MFA_VIGENCIA_MINUTOS = 5;
@@ -263,14 +264,13 @@ router.post('/correo/solicitar', limitarCorreo, async (req, res) => {
        VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE), 'cambio_correo', ?)`,
       [retoId, req.usuario.uid, codigoHash, MFA_VIGENCIA_MINUTOS, cifrar(nuevoCorreo)]
     );
-    await encolarEventoCuenta(connection, `mfa-email-change:${retoId}`, {
-      evento: 'mfa.email.change.code',
-      email: nuevoCorreo,
-      token_mfa: codigo,
-      timestamp: new Date().toISOString(),
-      vigencia_segundos: MFA_VIGENCIA_MINUTOS * 60
-    });
     await connection.commit();
+    // Correo directo (nodemailer): ni el correo nuevo ni el código pasan por n8n.
+    enviarCorreoEnSegundoPlano({
+      to: nuevoCorreo,
+      subject: 'Confirma tu nuevo correo',
+      text: `Tu código para confirmar el cambio de correo es: ${codigo}\n\nVence en ${MFA_VIGENCIA_MINUTOS} minutos.`
+    });
     return res.status(202).json({
       ok: true,
       challengeId: retoId,
@@ -368,14 +368,13 @@ router.post('/correo/confirmar', limitarConfirmacionCorreo, async (req, res) => 
       "UPDATE retos_mfa SET estado = 'verificado' WHERE reto_id = ? AND estado = 'pendiente'",
       [datos.challengeId]
     );
-    await encolarEventoCuenta(connection, `security-email-change:${datos.challengeId}`, {
-      evento: 'security.notice',
-      email: reto.correo_anterior,
-      tipo: 'correo_cambiado',
-      timestamp: new Date().toISOString()
-    });
     await auditarCuenta(req.usuario, 'editar', ['correo'], req.usuario.uid, connection);
     await connection.commit();
+    enviarCorreoEnSegundoPlano({
+      to: reto.correo_anterior,
+      subject: 'Aviso de seguridad: tu correo cambió',
+      text: 'El correo de acceso de tu cuenta fue cambiado. Si no fuiste tú, comunícate de inmediato con el administrador de la plataforma.'
+    });
     return res.json({ ok: true, mensaje: 'Correo actualizado. Inicia sesión nuevamente.' });
   } catch (err) {
     if (connection) await connection.rollback();
@@ -439,14 +438,13 @@ router.post('/password', limitarPassword, async (req, res) => {
       'UPDATE refresh_tokens SET revocado = TRUE WHERE usuario_id = ? AND revocado = FALSE',
       [req.usuario.uid]
     );
-    await encolarEventoCuenta(connection, `security-password-change:${req.usuario.uid}:${Date.now()}`, {
-      evento: 'security.notice',
-      email: usuarios[0].correo,
-      tipo: 'password_cambiada',
-      timestamp: new Date().toISOString()
-    });
     await auditarCuenta(req.usuario, 'editar', ['password'], req.usuario.uid, connection);
     await connection.commit();
+    enviarCorreoEnSegundoPlano({
+      to: usuarios[0].correo,
+      subject: 'Aviso de seguridad: tu contraseña cambió',
+      text: 'La contraseña de tu cuenta fue cambiada. Si no fuiste tú, comunícate de inmediato con el administrador de la plataforma.'
+    });
     return res.json({ ok: true, mensaje: 'Contraseña actualizada. Inicia sesión nuevamente.' });
   } catch (err) {
     if (connection) await connection.rollback();

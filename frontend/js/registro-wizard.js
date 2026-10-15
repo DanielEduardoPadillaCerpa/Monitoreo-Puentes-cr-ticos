@@ -12,12 +12,13 @@
   const PASOS = ['Tipo de institución', 'Tus datos', 'Confirmar'];
   const ULTIMO = PASOS.length - 1;
   const CLAVE_BORRADOR = 'si_registro_borrador';
-  // Nunca se guardan en el navegador: contraseñas.
-  const CAMPOS_NO_PERSISTIBLES = new Set(['password', 'passwordConfirmacion']);
+  // Nunca se guardan en el navegador: contraseñas ni NIT.
+  const CAMPOS_NO_PERSISTIBLES = new Set(['password', 'passwordConfirmacion', 'nit']);
   const CAMPOS_POR_PASO = {
-    1: ['nombreCompleto', 'correo', 'password', 'passwordConfirmacion'],
+    1: ['nombreCompleto', 'nit', 'correo', 'password', 'passwordConfirmacion'],
     2: ['aceptaTerminos', 'aceptaTratamiento']
   };
+  let captcha = null;
 
   let tipos = [];
   let paso = 0;
@@ -151,7 +152,11 @@
     }
     if (n === 1) {
       CAMPOS_POR_PASO[1].forEach(c => marcarError(c, ''));
-      if ((valor('nombreCompleto') || '').length < 5) fallar('nombreCompleto', 'Escribe tu nombre completo.');
+      const palabras = (valor('nombreCompleto') || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/[^A-Za-z]+/g, ' ').trim().split(' ').filter(p => p.length >= 2);
+      if (palabras.length < 2) fallar('nombreCompleto', 'Escribe al menos un nombre y un apellido.');
+      const baseNit = (valor('nit') || '').split('-')[0].replace(/[\s.]/g, '');
+      if (!/^\d{6,15}$/.test(baseNit)) fallar('nit', 'Escribe el NIT de tu entidad: solo números, con o sin dígito de verificación.');
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valor('correo') || '')) fallar('correo', 'Escribe un correo válido.');
       const password = $('[data-campo="password"]').value;
       if (password.length < 10 || password.length > 72) fallar('password', 'Usa entre 10 y 72 caracteres.');
@@ -163,6 +168,12 @@
       CAMPOS_POR_PASO[2].forEach(c => marcarError(c, ''));
       if (!valor('aceptaTerminos')) fallar('aceptaTerminos', 'Debes aceptar los términos para crear la cuenta.');
       if (!valor('aceptaTratamiento')) fallar('aceptaTratamiento', 'Debes autorizar el tratamiento de datos para crear la cuenta.');
+      captcha?.marcarError('');
+      if (captcha && !captcha.completo()) {
+        captcha.marcarError('Resuelve la operación.');
+        if (valido) captcha.enfocar();
+        valido = false;
+      }
     }
     if (!valido) raiz.querySelector('.is-invalid')?.focus();
     return valido;
@@ -175,6 +186,7 @@
       ['Tipo de institución', tipo?.etiqueta],
       ...(tipo?.camposEspecificos || []).filter(c => valor(c.campo)).map(c => [c.etiqueta, c.opciones.find(o => o.valor === valor(c.campo))?.etiqueta]),
       ['Nombre', valor('nombreCompleto')],
+      ['NIT', valor('nit')],
       ['Correo', valor('correo')]
     ];
     $('#vf-resumen').innerHTML = filas.map(([k, v]) => `<dt>${escapar(k)}</dt><dd>${escapar(v || '—')}</dd>`).join('');
@@ -186,10 +198,12 @@
     const payload = {
       tipoInstitucion: tipo.id,
       nombreCompleto: valor('nombreCompleto'),
+      nit: valor('nit'),
       correo: valor('correo').toLowerCase(),
       password: $('[data-campo="password"]').value,
       aceptaTerminos: valor('aceptaTerminos') === true,
-      aceptaTratamiento: valor('aceptaTratamiento') === true
+      aceptaTratamiento: valor('aceptaTratamiento') === true,
+      ...(captcha ? captcha.leer() : {})
     };
     // Solo se envían los campos del tipo elegido: el servidor rechaza los ajenos.
     for (const c of tipo.camposEspecificos) if (valor(c.campo)) payload[c.campo] = valor(c.campo);
@@ -207,7 +221,7 @@
     const boton = $('#vf-enviar');
     const mensaje = $('#vf-mensaje');
     boton.disabled = true;
-    boton.textContent = 'Creando cuenta…';
+    boton.textContent = 'Enviando solicitud…';
     mensaje.hidden = true;
     try {
       const resp = await fetch(apiBase() + '/api/auth/registro', {
@@ -217,9 +231,14 @@
       });
       const datos = await resp.json().catch(() => ({}));
       if (!resp.ok) {
+        // Cada operación del captcha sirve una sola vez: tras cualquier error se pide otra.
+        captcha?.recargar();
         if (datos.errores) {
-          Object.entries(datos.errores).forEach(([campo, texto]) => marcarError(campo, texto));
-          const primero = Object.keys(datos.errores).find(c => c !== '_');
+          Object.entries(datos.errores).forEach(([campo, texto]) => {
+            if (campo === 'captcha') captcha?.marcarError(texto);
+            else marcarError(campo, texto);
+          });
+          const primero = Object.keys(datos.errores).find(c => c !== '_' && c !== 'captcha');
           if (primero) irA(pasoDeCampo(primero));
         }
         throw new Error(resp.status === 429
@@ -236,21 +255,14 @@
       mensaje.hidden = false;
     } finally {
       boton.disabled = false;
-      boton.textContent = 'Crear cuenta';
+      boton.textContent = 'Enviar solicitud';
     }
   }
 
-  function mostrarConfirmacion(datos) {
+  function mostrarConfirmacion() {
     paso = ULTIMO + 1;
     pintarProgreso();
     $('#vf-progreso').querySelectorAll('li').forEach(li => { li.className = 'hecho'; });
-    $('#vf-confirmacion-correo').textContent = datos.correoInstitucional
-      ? 'Registraste un correo del dominio de tu institución: al confirmarlo, una futura verificación será más ágil.'
-      : '';
-    const login = new URL('login.html', window.location.href);
-    login.searchParams.set('correo', datos.correo);
-    login.searchParams.set('registro', 'completo');
-    $('#vf-ir-login').href = login.href;
     const seccion = raiz.querySelector(`[data-paso="${ULTIMO + 1}"]`);
     seccion.hidden = false;
     seccion.querySelector('h2').focus();
@@ -277,6 +289,7 @@
     pintarTipos();
     pintarCamposEspecificos();
     pintarProgreso();
+    if (window.Captcha && $('#vf-captcha')) captcha = window.Captcha.montar($('#vf-captcha'), { idInput: 'vf-captcha-respuesta' });
 
     $('#vf-siguiente').addEventListener('click', () => { if (validarPaso(paso)) irA(paso + 1); });
     $('#vf-anterior').addEventListener('click', () => irA(paso - 1));

@@ -19,7 +19,7 @@ const {
   requiereSuperadmin
 } = require('../autorizacion');
 const verificacionCompra = require('../verificacionCompra');
-const { enviarCodigoMfaN8n } = require('../mfaCourier');
+const { enviarCorreo } = require('../seguridad/correo');
 const {
   TIPOS_COMPRADOR,
   TIPOS_DOCUMENTO,
@@ -1497,7 +1497,12 @@ router.post('/compra/autorizacion', requiereAutenticacion, limitarAutorizacionCo
     }
     await connection.commit();
     try {
-      await enviarCodigoMfaN8n({ correo: req.usuario.correo, codigo: creada.codigo, vigenciaMinutos: creada.vigenciaMinutos });
+      // Correo directo (nodemailer): el código nunca pasa por n8n.
+      await enviarCorreo({
+        to: req.usuario.correo,
+        subject: 'Código de autorización de compra',
+        text: `Tu código para autorizar esta compra es: ${creada.codigo}\n\nVence en ${creada.vigenciaMinutos} minutos y sirve una sola vez.`
+      });
     } catch (err) {
       console.error('[verificacion] No se pudo enviar el código de autorización:', err.code || 'AUTH_CODE_DELIVERY_FAILED');
       return res.status(503).json({ error: 'No fue posible enviar el código. Inténtalo de nuevo en unos minutos.' });

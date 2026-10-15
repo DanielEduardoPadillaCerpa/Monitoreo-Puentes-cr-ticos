@@ -5,7 +5,8 @@
 
 const MIGRACIONES = [
   require('./001_verificacion_institucional'),
-  require('./002_verificacion_en_compra')
+  require('./002_verificacion_en_compra'),
+  require('./003_registro_verificado')
 ];
 
 async function asegurarTablaControl(db) {

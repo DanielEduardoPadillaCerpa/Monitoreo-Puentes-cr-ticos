@@ -1,4 +1,7 @@
-const TIMEOUT_MS = 15000;
+const { enviarCorreo } = require('./seguridad/correo');
+
+// Correos de comprobantes. Se envían por SMTP directo (nodemailer): el correo
+// del cliente y el enlace firmado ya no pasan por n8n.
 
 function errorConfiguracion(codigo) {
   const error = new Error(codigo);
@@ -10,86 +13,8 @@ function esLocalhost(hostname) {
   return ['localhost', '127.0.0.1', '::1'].includes(hostname);
 }
 
-function obtenerConfiguracionWebhook() {
-  const urlConfigurada = process.env.N8N_RECEIPT_WEBHOOK_URL || process.env.N8N_MFA_WEBHOOK_URL;
-  const secreto = process.env.N8N_RECEIPT_WEBHOOK_SECRET || process.env.N8N_MFA_WEBHOOK_SECRET;
-  if (!urlConfigurada || !secreto || secreto.length < 32) {
-    throw errorConfiguracion('N8N_RECEIPT_CONFIGURATION_REQUIRED');
-  }
-
-  let url;
-  try {
-    url = new URL(urlConfigurada);
-  } catch {
-    throw errorConfiguracion('N8N_RECEIPT_WEBHOOK_URL_INVALID');
-  }
-  if (!process.env.N8N_RECEIPT_WEBHOOK_URL) {
-    if (!url.pathname.endsWith('/mfa-login-code')) {
-      throw errorConfiguracion('N8N_RECEIPT_WEBHOOK_URL_INVALID');
-    }
-    url.pathname = `${url.pathname.slice(0, -'mfa-login-code'.length)}receipt-email`;
-  }
-
-  const localhost = esLocalhost(url.hostname);
-  if (url.username || url.password || url.search || url.hash ||
-      (url.protocol !== 'https:' && !(localhost && url.protocol === 'http:'))) {
-    throw errorConfiguracion('N8N_RECEIPT_WEBHOOK_HTTPS_REQUIRED');
-  }
-  return { url: url.toString(), secreto };
-}
-
 async function enviarMensaje({ to, subject, text, html }) {
-  const configuracion = obtenerConfiguracionWebhook();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const response = await fetch(configuracion.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${configuracion.secreto}`
-      },
-      body: JSON.stringify({
-        event: 'receipt.email',
-        to,
-        subject,
-        text,
-        html
-      }),
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      let remoteCode;
-      try {
-        const result = await response.json();
-        if (typeof result?.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(result.code)) {
-          remoteCode = result.code;
-        }
-      } catch {
-        remoteCode = null;
-      }
-      throw errorConfiguracion(remoteCode
-        ? `N8N_RECEIPT_SMTP_${remoteCode}`
-        : `N8N_RECEIPT_HTTP_${response.status}`);
-    }
-    let resultado;
-    try {
-      resultado = await response.json();
-    } catch {
-      throw errorConfiguracion('N8N_RECEIPT_RESPONSE_INVALID');
-    }
-    if (resultado?.ok !== true) {
-      throw errorConfiguracion('N8N_RECEIPT_RESPONSE_INVALID');
-    }
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      throw errorConfiguracion('N8N_RECEIPT_DELIVERY_TIMEOUT');
-    }
-    if (err.code) throw err;
-    throw errorConfiguracion('N8N_RECEIPT_DELIVERY_FAILED');
-  } finally {
-    clearTimeout(timeout);
-  }
+  await enviarCorreo({ to, subject, text, html });
 }
 
 function obtenerBaseUrlComprobante() {
@@ -142,6 +67,5 @@ async function enviarAvisoComprobanteAdmin({ pedidoId, numero, totalCentavos, mo
 
 module.exports = {
   enviarEnlaceComprobanteCliente,
-  enviarAvisoComprobanteAdmin,
-  obtenerConfiguracionWebhook
+  enviarAvisoComprobanteAdmin
 };

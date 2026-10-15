@@ -42,10 +42,7 @@
         <label class="form-label" data-i18n="login_password">Contraseña</label>
         <input type="password" id="loginPassword" class="form-control" required>
       </div>
-      <div class="form-check mb-2">
-        <input class="form-check-input" type="checkbox" id="captchaHumano" required>
-        <label class="form-check-label" for="captchaHumano" data-i18n="login_human_check">Soy humano (captcha)</label>
-      </div>
+      <div class="mb-3" id="login-captcha"></div>
       <div class="form-check mb-3">
         <input class="form-check-input" type="checkbox" id="aceptaTerminos" required>
         <label class="form-check-label" for="aceptaTerminos" data-i18n="login_terms_check">Acepto los términos y condiciones</label>
@@ -100,6 +97,7 @@
 <script src="js/cart.js"></script>
 <script src="js/navbar.js"></script>
 <script src="js/chatbot.js"></script>
+<script src="js/captcha.js"></script>
 
 <script>
 const form = document.getElementById('form-login');
@@ -221,6 +219,8 @@ try {
   sessionStorage.removeItem('mfa_pendiente');
 }
 
+const captchaLogin = Captcha.montar(document.getElementById('login-captcha'), { idInput: 'loginCaptcha' });
+
 const parametrosLogin = new URLSearchParams(window.location.search);
 const correoRegistro = parametrosLogin.get('correo');
 if (correoRegistro) {
@@ -235,13 +235,18 @@ form.addEventListener('submit', async function (e) {
   const apiBase = apiBaseUrl();
   const correo = document.getElementById('loginCorreo').value.trim();
   const password = document.getElementById('loginPassword').value;
-  const captchaHumano = document.getElementById('captchaHumano').checked;
   const aceptaTerminos = document.getElementById('aceptaTerminos').checked;
 
-  if (!captchaHumano || !aceptaTerminos) {
-    mostrarMensaje('Debes aceptar términos y confirmar que eres humano', 'danger');
+  if (!aceptaTerminos) {
+    mostrarMensaje('Debes aceptar los términos y condiciones', 'danger');
     return;
   }
+  if (!captchaLogin.completo()) {
+    captchaLogin.marcarError('Resuelve la operación.');
+    captchaLogin.enfocar();
+    return;
+  }
+  captchaLogin.marcarError('');
 
   btn.disabled = true;
 
@@ -249,10 +254,17 @@ form.addEventListener('submit', async function (e) {
     const resp = await fetch(apiBase + '/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ correo, password, captchaHumano })
+      body: JSON.stringify({ correo, password, ...captchaLogin.leer() })
     });
     const datos = await resp.json().catch(() => ({}));
     if (resp.status !== 202 || datos.mfaRequired !== true || !datos.challengeId) {
+      // Cada operación del captcha sirve una sola vez.
+      captchaLogin.recargar();
+      if (datos.code === 'CUENTA_PENDIENTE') {
+        mostrarMensaje(datos.error, 'warning');
+        btn.disabled = false;
+        return;
+      }
       const error = new Error(datos.message || datos.error || (resp.status === 503
         ? 'El servicio de envío del código de seguridad no está disponible. Intenta de nuevo más tarde.'
         : 'No fue posible iniciar la verificación de seguridad.'));

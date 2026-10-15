@@ -2,12 +2,14 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { crearApp } = require('./src/app');
-const { migrar } = require('./src/db');
+const { migrar, pool } = require('./src/db');
 const { getPaymentProvider } = require('./src/paymentProviderInstance');
 const { iniciarWorkerEmail } = require('./src/emailOutbox');
 const { iniciarWorkerAutomatizaciones } = require('./src/automationOutbox');
 const { iniciarJobExpiracionPedidos } = require('./src/paymentJobs');
-const { obtenerConfiguracionMfa } = require('./src/mfaCourier');
+const { validarConfiguracionCorreo } = require('./src/seguridad/correo');
+const { iniciarSincronizacionPeriodica } = require('./src/seguridad/padron');
+const { hashRelleno } = require('./src/seguridad/contrasenas');
 const { iniciarRefrescoIndice } = require('./src/assistant/indiceCatalogo');
 const { validarConfiguracionSegura } = require('./src/configSegura');
 const { iniciarJobVerificaciones } = require('./src/verificacionJobs');
@@ -24,15 +26,17 @@ async function iniciar() {
     }
     validarConfiguracionSegura();
     getPaymentProvider();
-    if (process.env.NODE_ENV === 'production') {
-      obtenerConfiguracionMfa({ produccion: true });
-    }
+    validarConfiguracionCorreo();
     await migrar(); // crea tablas si no existen
     iniciarRefrescoIndice();
     iniciarWorkerEmail();
     iniciarWorkerAutomatizaciones();
     iniciarJobExpiracionPedidos();
     iniciarJobVerificaciones();
+    // Copia cifrada del padrón desde la fuente (PADRON_DB_URI), al arrancar y
+    // cada PADRON_SYNC_MINUTOS; nunca bloquea el arranque.
+    iniciarSincronizacionPeriodica(pool);
+    hashRelleno();
 
     // No registrar valores de configuración ni información sensible.
     console.log('[env] Archivo .env:', path.join(__dirname, '.env'));

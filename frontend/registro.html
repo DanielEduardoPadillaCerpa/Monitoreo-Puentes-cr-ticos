@@ -83,19 +83,26 @@
 
         <div data-paso="0">
           <h2>¿A qué tipo de institución perteneces?</h2>
-          <p class="vf-ayuda">Define tu catálogo y las reglas que aplicarán si más adelante compras productos que exigen verificación. Elegirlo <strong>no es una acreditación</strong>: no concede acceso a productos restringidos.</p>
+          <p class="vf-ayuda">Define tu catálogo. La comprobaremos contra el padrón institucional junto con tu NIT y tu nombre: debe ser la institución a la que realmente perteneces.</p>
           <div id="vf-tipos" class="vf-tipos" role="radiogroup" aria-label="Tipo de institución"></div>
           <div id="vf-error-tipo" class="vf-error-campo" role="alert"></div>
         </div>
 
         <div data-paso="1" hidden>
-          <h2>Tus datos de acceso</h2>
-          <p class="vf-ayuda">Solo lo necesario para crear y proteger tu cuenta. No te pedimos documentos, cédula ni datos de tu entidad en este momento.</p>
+          <h2>Tus datos</h2>
+          <p class="vf-ayuda">Solo personas registradas en el padrón institucional pueden tener cuenta. Escribe tu nombre y el NIT de tu entidad tal como figuran allí; un administrador revisará tu solicitud.</p>
           <div class="row">
-            <div class="col-12 mb-3">
+            <div class="col-md-7 mb-3">
               <label class="form-label" for="vf-nombreCompleto">Nombre completo *</label>
               <input class="form-control" id="vf-nombreCompleto" data-campo="nombreCompleto" autocomplete="name" maxlength="150" required>
+              <div class="form-text">Nombres y apellidos (el orden no importa).</div>
               <div class="vf-error-campo" data-error="nombreCompleto"></div>
+            </div>
+            <div class="col-md-5 mb-3">
+              <label class="form-label" for="vf-nit">NIT de tu entidad *</label>
+              <input class="form-control" id="vf-nit" data-campo="nit" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="999000001-2" required>
+              <div class="form-text">Con o sin dígito de verificación.</div>
+              <div class="vf-error-campo" data-error="nit"></div>
             </div>
             <div class="col-12 mb-3">
               <label class="form-label" for="vf-correo">Correo electrónico *</label>
@@ -122,9 +129,9 @@
           <h2>Confirma y acepta</h2>
           <dl id="vf-resumen" class="vf-resumen"></dl>
           <div class="alert alert-light border small">
-            <strong>¿Cuándo te pediremos más datos?</strong> Solo si compras productos que exigen verificación (por ejemplo,
-            equipos de protección balística). En ese momento te pediremos los datos de tu entidad, tu documento de identidad
-            y la evidencia de tu vínculo, y te explicaremos para qué se usa cada uno.
+            <strong>¿Qué pasa después?</strong> Comprobamos tu NIT, tu nombre y tu institución contra el padrón institucional y un
+            administrador revisa la solicitud. No podrás iniciar sesión hasta que la apruebe; te avisaremos por correo.
+            Tu NIT y tu nombre se guardan cifrados.
           </div>
           <div class="form-check mt-3">
             <input class="form-check-input" type="checkbox" id="vf-terminos" data-campo="aceptaTerminos">
@@ -134,30 +141,30 @@
           <div class="form-check mt-2">
             <input class="form-check-input" type="checkbox" id="vf-acepta" data-campo="aceptaTratamiento">
             <label class="form-check-label small" for="vf-acepta">
-              Autorizo el tratamiento de mi nombre y correo conforme a la
+              Autorizo el tratamiento de mi nombre, NIT de mi entidad y correo conforme a la
               <a href="#" data-bs-toggle="modal" data-bs-target="#modalPolitica">Política de Tratamiento de Datos</a>
-              (Ley 1581 de 2012), para crear y administrar mi cuenta y gestionar mis compras.
+              (Ley 1581 de 2012), para verificar mi vínculo institucional, crear y administrar mi cuenta y gestionar mis compras.
             </label>
           </div>
           <div class="vf-error-campo" data-error="aceptaTratamiento"></div>
+          <div class="mt-3" id="vf-captcha"></div>
         </div>
 
         <div data-paso="3" hidden>
-          <h2 tabindex="-1">Cuenta creada</h2>
-          <p>Ya puedes iniciar sesión. Te enviaremos un código a tu correo para confirmarlo.</p>
+          <h2 tabindex="-1">Solicitud recibida</h2>
+          <p>Un administrador revisará tu solicitud. Te avisaremos por correo cuando tu cuenta quede habilitada; hasta entonces no podrás iniciar sesión.</p>
           <ul class="vf-requisitos mb-3">
-            <li><span class="vf-etiqueta cumplido">Disponible</span><span>Comprar productos de uso general de tu catálogo.</span></li>
-            <li><span class="vf-etiqueta condicional">Con verificación</span><span>Productos restringidos: te pediremos verificar tu identidad y tu vínculo con la institución cuando los necesites, desde <strong>Mi verificación</strong>.</span></li>
+            <li><span class="vf-etiqueta condicional">En revisión</span><span>Comprobamos tu NIT, tu nombre y tu institución contra el padrón institucional.</span></li>
+            <li><span class="vf-etiqueta cumplido">Al aprobarse</span><span>Inicias sesión con tu correo, tu contraseña y un código que te enviaremos por correo.</span></li>
           </ul>
-          <p id="vf-confirmacion-correo" class="small text-muted"></p>
-          <a id="vf-ir-login" class="btn btn-dark" href="login.html">Iniciar sesión</a>
+          <a id="vf-ir-login" class="btn btn-dark" href="login.html">Ir a iniciar sesión</a>
         </div>
 
         <div id="vf-mensaje" role="alert" hidden></div>
         <div id="vf-acciones" class="vf-acciones">
           <button type="button" id="vf-anterior" class="btn btn-outline-secondary">← Anterior</button>
           <button type="button" id="vf-siguiente" class="btn btn-dark ms-auto">Continuar →</button>
-          <button type="button" id="vf-enviar" class="btn btn-success ms-auto" hidden>Crear cuenta</button>
+          <button type="button" id="vf-enviar" class="btn btn-success ms-auto" hidden>Enviar solicitud</button>
         </div>
       </section>
 
@@ -336,6 +343,7 @@
 <script src="js/cart.js"></script>
 <script src="js/navbar.js"></script>
 <script src="js/chatbot.js"></script>
+<script src="js/captcha.js"></script>
 <script src="js/registro-wizard.js"></script>
 
 <script>

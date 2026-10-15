@@ -77,7 +77,7 @@ async function obtenerContexto(usuarioToken, { db = pool, bloquear = false } = {
   if (!Number.isSafeInteger(usuarioId) || usuarioId < 1) return CONTEXTO_INVITADO;
 
   const [filas] = await db.query(
-    `SELECT u.id, u.rol, u.cliente_id, u.correo_verificado_en, u.es_superadmin, u.es_cuenta_prueba,
+    `SELECT u.id, u.rol, u.cliente_id, u.correo_verificado_en, u.es_superadmin, u.es_cuenta_prueba, u.estado_cuenta,
             c.estado_verificacion, c.institucion_aprobada, c.tipo_institucion,
             c.autorizacion_general, c.verificado_hasta
      FROM usuarios u
@@ -106,7 +106,9 @@ async function obtenerContexto(usuarioToken, { db = pool, bloquear = false } = {
 
   const estado = fila.cliente_id ? fila.estado_verificacion || 'borrador' : null;
   const correoVerificado = Boolean(fila.correo_verificado_en);
-  const cuentaActiva = Boolean(fila.cliente_id) && correoVerificado && estado !== 'suspendido';
+  // Cuenta aprobada por un administrador (registro verificado), correo
+  // confirmado con MFA y sin suspensión.
+  const cuentaActiva = Boolean(fila.cliente_id) && fila.estado_cuenta === 'activa' && correoVerificado && estado !== 'suspendido';
   const aprobadoEnBase = cuentaActiva && estado === 'aprobado' && Boolean(fila.institucion_aprobada);
   const vigente = verificacionVigente(fila);
   const aprobado = aprobadoEnBase && vigente;

@@ -904,3 +904,16 @@ body.admin-console-page .tab-pane > form .form-label,
 body.admin-console-page .tab-pane > form .form-check-label,
 body.admin-console-page .tab-pane > p.small { color: rgba(226, 240, 236, .9) !important; }
 body.admin-console-page .tab-pane > p.small code { color: #c6f04a; }
+
+/* Contador de solicitudes de cuenta pendientes en el menú admin. */
+.navbar .badge-solicitudes {
+  background: #dc2626 !important;
+  color: #fff !important;
+  opacity: 1 !important;
+  font-size: .68rem;
+  font-weight: 700;
+  min-width: 1.35em;
+  padding: .25em .45em;
+  margin-left: .15rem;
+  vertical-align: text-top;
+}

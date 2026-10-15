@@ -1,0 +1,115 @@
+{
+  "name": "W12 - Avisos de solicitudes de registro",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "registro-avisos",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5e9d2a40-0000-4000-8000-000000000001",
+      "name": "Webhook W12 firmado",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "registro-avisos"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secreto = $env.N8N_REGISTRO_SECRET || '';\nif (secreto.length < 32) throw new Error('N8N_REGISTRO_SECRET no está configurado');\n\nconst entrada = $input.first().json;\nconst cabeceras = entrada.headers || {};\nconst cuerpo = entrada.body || {};\nconst timestamp = String(cabeceras['x-timestamp'] || '');\nconst firma = String(cabeceras['x-signature'] || '');\n\n// 1. Ventana de 5 minutos contra repeticiones.\nconst ahora = Math.floor(Date.now() / 1000);\nif (!/^\\d{9,11}$/.test(timestamp) || Math.abs(ahora - Number(timestamp)) > 300) {\n  throw new Error('Aviso vencido o sin marca de tiempo');\n}\n\n// 2. Forma exacta del cuerpo: solo estas tres claves.\nconst EVENTOS = ['registro.recibido', 'registro.aprobado', 'registro.rechazado'];\nconst claves = Object.keys(cuerpo).sort().join(',');\nif (claves !== 'evento,resultado,solicitud_id' || !EVENTOS.includes(cuerpo.evento) ||\n    !Number.isSafeInteger(cuerpo.solicitud_id) || typeof cuerpo.resultado !== 'string' || cuerpo.resultado.length > 40) {\n  throw new Error('Cuerpo no permitido');\n}\n\n// 3. Firma HMAC en tiempo constante.\nconst esperada = crypto.createHmac('sha256', secreto)\n  .update(timestamp + '.' + cuerpo.evento + '.' + cuerpo.solicitud_id)\n  .digest('hex');\nconst a = Buffer.from(/^[a-f0-9]{64}$/.test(firma) ? firma : '0'.repeat(64), 'hex');\nconst b = Buffer.from(esperada, 'hex');\nif (!crypto.timingSafeEqual(a, b)) throw new Error('Firma inválida');\n\nreturn [{ json: { evento: cuerpo.evento, solicitud_id: cuerpo.solicitud_id, resultado: cuerpo.resultado } }];"
+      },
+      "id": "5e9d2a40-0000-4000-8000-000000000002",
+      "name": "Verificar firma",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "5e9d2a40-0000-4000-8000-000000000003",
+      "name": "Responder recibido",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":false}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "5e9d2a40-0000-4000-8000-000000000004",
+      "name": "Responder rechazado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook W12 firmado": {
+      "main": [
+        [
+          {
+            "node": "Verificar firma",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar firma": {
+      "main": [
+        [
+          {
+            "node": "Responder recibido",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder rechazado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "active": false,
+  "versionId": "5e9d2a40-0000-4000-8000-000000000009",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

@@ -1,20 +1,21 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { rateLimit } = require('express-rate-limit');
 const { pool } = require('../db');
-const { cifrar } = require('../crypto');
-const { enviarCodigoMfaN8n } = require('../mfaCourier');
 const { hashCodigoMfa, compararHashesMfa, generarCodigoMfa } = require('../mfaCodes');
 const {
   validarRegistro,
-  dominioCoincide,
   camposEspecificosDe,
   configuracionPublica
 } = require('../registroInstitucional');
-const { registrarHistorial } = require('../verificacion');
+const { crearReto, verificarCaptcha } = require('../seguridad/captcha');
+const { compararContrasena } = require('../seguridad/contrasenas');
+const { clavesConfiguradas } = require('../seguridad/cifradoCampos');
+const { procesarRegistro, insertarRetoMfa } = require('../seguridad/registroVerificado');
+const { enviarCorreoEnSegundoPlano } = require('../seguridad/correo');
+const { avisarN8n } = require('../seguridad/avisosN8n');
 
 // La institución del token solo sirve para la apariencia del portal. Las
 // decisiones de acceso se toman con autorizacion.obtenerContexto() desde MySQL.
@@ -68,12 +69,6 @@ const MFA_REENVIO_MAXIMOS = 5;
 const MFA_REINTENTOS_LOGIN_VENTANA_MINUTOS = 15;
 const MFA_REINTENTOS_LOGIN_MAXIMOS = 5;
 
-function entregaMfaNoConfirmada(error) {
-  return error.code === 'N8N_MFA_DELIVERY_TIMEOUT' ||
-    error.code === 'N8N_MFA_DELIVERY_FAILED' ||
-    /^N8N_MFA_HTTP_5\d{2}$/.test(error.code || '');
-}
-
 function enmascararCorreo(correo) {
   const [nombre, dominio] = String(correo).split('@');
   if (!dominio) return 'tu correo registrado';
@@ -81,11 +76,14 @@ function enmascararCorreo(correo) {
   return `${prefijo}${'*'.repeat(Math.max(2, nombre.length - prefijo.length))}@${dominio}`;
 }
 
-async function enviarCodigoMfa({ correo, codigo }) {
-  await enviarCodigoMfaN8n({
-    correo,
-    codigo,
-    vigenciaMinutos: MFA_CODIGO_VIGENCIA_MINUTOS
+// El código se envía por correo directo (nodemailer) y en segundo plano: ni
+// el correo ni el código pasan por n8n, y el envío no retrasa la respuesta.
+function enviarCodigoMfa({ correo, codigo }) {
+  enviarCorreoEnSegundoPlano({
+    to: correo,
+    subject: 'Tu código de acceso',
+    text: `Tu código de acceso es: ${codigo}\n\nVence en ${MFA_CODIGO_VIGENCIA_MINUTOS} minutos y sirve una sola vez. Si no intentaste iniciar sesión, ignora este mensaje y cambia tu contraseña.`,
+    html: `<p>Tu código de acceso es:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${codigo}</p><p>Vence en ${MFA_CODIGO_VIGENCIA_MINUTOS} minutos y sirve una sola vez. Si no intentaste iniciar sesión, ignora este mensaje y cambia tu contraseña.</p>`
   });
 }
 
@@ -119,73 +117,22 @@ const limitarReenvioMfa = crearLimitadorMfa({
 });
 
 async function crearRetoMfa(usuario) {
-  const [intentos] = await pool.query(
-    `SELECT COUNT(*) AS cantidad
-     FROM retos_mfa
-     WHERE usuario_id = ? AND proposito = 'inicio_sesion'
-       AND creado_en >= DATE_SUB(NOW(), INTERVAL ? MINUTE)`,
-    [usuario.id, MFA_REINTENTOS_LOGIN_VENTANA_MINUTOS]
-  );
-  if (Number(intentos[0].cantidad) >= MFA_REINTENTOS_LOGIN_MAXIMOS) {
+  const retoId = crypto.randomBytes(32).toString('hex');
+  const codigo = generarCodigoMfa();
+  const creado = await insertarRetoMfa({
+    usuarioId: usuario.id,
+    retoId,
+    codigoHash: hashCodigoMfa(retoId, usuario.id, codigo),
+    vigenciaMinutos: MFA_CODIGO_VIGENCIA_MINUTOS,
+    ventanaMinutos: MFA_REINTENTOS_LOGIN_VENTANA_MINUTOS,
+    maximo: MFA_REINTENTOS_LOGIN_MAXIMOS
+  });
+  if (!creado) {
     const error = new Error('Demasiados intentos de acceso. Espera unos minutos antes de volver a intentarlo.');
     error.status = 429;
     throw error;
   }
-
-  const retoId = crypto.randomBytes(32).toString('hex');
-  const codigo = generarCodigoMfa();
-  const codigoHash = hashCodigoMfa(retoId, usuario.id, codigo);
-
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-    await connection.query('SELECT id FROM usuarios WHERE id = ? FOR UPDATE', [usuario.id]);
-    await connection.query(
-      "UPDATE retos_mfa SET estado = 'cancelado' WHERE usuario_id = ? AND proposito = 'inicio_sesion' AND estado = 'pendiente'",
-      [usuario.id]
-    );
-    await connection.query(
-      `INSERT INTO retos_mfa (reto_id, usuario_id, codigo_hash, expira_en)
-       VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE))`,
-      [retoId, usuario.id, codigoHash, MFA_CODIGO_VIGENCIA_MINUTOS]
-    );
-    await connection.commit();
-  } catch (err) {
-    await connection.rollback();
-    throw err;
-  } finally {
-    connection.release();
-  }
-
-  try {
-    await enviarCodigoMfa({ correo: usuario.correo, codigo });
-  } catch (err) {
-    const codigoError = err.code || 'EMAIL_DELIVERY_FAILED';
-    if (entregaMfaNoConfirmada(err)) {
-      console.error('[auth] Entrega MFA no confirmada; el reto sigue activo:', codigoError);
-      return {
-        retoId,
-        correoEnmascarado: enmascararCorreo(usuario.correo),
-        entregaNoConfirmada: true
-      };
-    }
-    try {
-      const [eliminacion] = await pool.query('DELETE FROM retos_mfa WHERE reto_id = ?', [retoId]);
-      if (eliminacion.affectedRows !== 1) throw new Error('MFA_CHALLENGE_CLEANUP_FAILED');
-    } catch (errorLimpieza) {
-      console.error('[auth] No se pudo borrar el reto MFA sin entregar:', errorLimpieza.code || 'MFA_CHALLENGE_CLEANUP_FAILED');
-      const error = new Error('No fue posible completar el envío del código. Intenta iniciar sesión nuevamente más tarde.');
-      error.status = 503;
-      error.code = 'MFA_CHALLENGE_CLEANUP_FAILED';
-      throw error;
-    }
-    console.error('[auth] No se pudo enviar el código MFA:', codigoError);
-    const error = new Error('El servicio de verificación temporal no se encuentra disponible. Por favor, intente más tarde.');
-    error.status = 422;
-    error.code = codigoError;
-    throw error;
-  }
-
+  enviarCodigoMfa({ correo: usuario.correo, codigo });
   return { retoId, correoEnmascarado: enmascararCorreo(usuario.correo) };
 }
 
@@ -201,6 +148,31 @@ const limitarRegistro = rateLimit({
   })
 });
 
+const limitarCaptcha = crearLimitadorMfa({
+  ventanaMs: 15 * 60 * 1000,
+  limite: 120,
+  mensaje: 'Demasiadas solicitudes de captcha desde esta conexión. Espera unos minutos.'
+});
+
+// GET /api/auth/captcha -> { id, svg }. La respuesta nunca sale del servidor.
+router.get('/captcha', limitarCaptcha, (req, res) => {
+  const { id, svg } = crearReto();
+  res.set('Cache-Control', 'no-store');
+  res.json({ id, svg });
+});
+
+function captchaValido(body) {
+  return verificarCaptcha(body?.captchaId, body?.captchaRespuesta);
+}
+
+function sinCamposCaptcha(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const { captchaId, captchaRespuesta, ...resto } = body;
+  return resto;
+}
+
+const ERROR_CAPTCHA = { code: 'CAPTCHA_INVALIDO', error: 'El resultado de la verificación no es correcto o ya venció. Resuelve la nueva operación.', errores: { captcha: 'Resuelve la operación de nuevo.' } };
+
 // GET /api/auth/registro/tipos -> tipos de institución, campos y documentos
 // requeridos. El formulario se construye con esta respuesta y el servidor
 // vuelve a aplicar las mismas reglas al recibir el registro.
@@ -209,103 +181,83 @@ router.get('/registro/tipos', (req, res) => {
   res.json({ tipos: configuracionPublica() });
 });
 
-// POST /api/auth/registro -> registro mínimo: nombre, correo, contraseña, tipo
-// de institución y aceptaciones. La cuenta nace activa para el uso general
-// (estado de verificación 'borrador' = verificación no iniciada) y sin ninguna
-// autorización de productos restringidos. Rol, institución verificada y
-// autorizaciones nunca se toman del navegador.
+const RESPUESTA_REGISTRO = Object.freeze({
+  ok: true,
+  estado: 'solicitud_recibida',
+  mensaje: 'Solicitud recibida. Un administrador la revisará y te avisaremos por correo cuando tu cuenta quede habilitada.'
+});
+
+// POST /api/auth/registro -> solicitud de cuenta verificada.
+//
+// Campos: tipo de institución, nombre completo, NIT, correo, contraseña,
+// aceptaciones y captcha. Se verifica la terna NIT + nombre + institución
+// contra el padrón cifrado y SIEMPRE se crea una solicitud pendiente: el
+// resultado es solo una bandera para el administrador. Al navegador se le
+// responde lo mismo (202) exista o no el correo y salga como salga la
+// verificación. Sin acceso hasta que un administrador apruebe.
 router.post('/registro', limitarRegistro, async (req, res) => {
-  let connection;
+  if (!captchaValido(req.body)) return res.status(400).json(ERROR_CAPTCHA);
+  const validacion = validarRegistro(sinCamposCaptcha(req.body));
+  if (!validacion.ok) {
+    return res.status(400).json({
+      error: validacion.errores._ || 'Revisa los datos marcados del registro.',
+      errores: validacion.errores
+    });
+  }
+  if (!clavesConfiguradas()) {
+    console.error('[auth] ENC_KEY/HMAC_KEY no configuradas: el registro está deshabilitado.');
+    return res.status(503).json({ error: 'El registro no está disponible temporalmente.' });
+  }
+  const datos = validacion.datos;
   try {
-    const validacion = validarRegistro(req.body);
-    if (!validacion.ok) {
-      return res.status(400).json({
-        error: validacion.errores._ || 'Revisa los datos marcados del registro.',
-        errores: validacion.errores
+    const resultado = await procesarRegistro(datos, { especificos: camposEspecificosDe(datos.tipoInstitucion, datos) });
+    if (resultado.existente) {
+      // El titular del correo se entera; quien intenta registrarse, no.
+      enviarCorreoEnSegundoPlano({
+        to: datos.correo,
+        subject: 'Intento de registro con tu correo',
+        text: 'Alguien intentó crear una cuenta con este correo, que ya tiene una cuenta o una solicitud en revisión. Si fuiste tú, inicia sesión. Si no, puedes ignorar este mensaje.'
       });
+    } else {
+      avisarN8n('registro.recibido', resultado.solicitudId, resultado.resultado);
     }
-    const datos = validacion.datos;
-    const tipo = datos.tipoInstitucion;
-    const especificos = camposEspecificosDe(tipo, datos);
-
-    const hash = await bcrypt.hash(datos.password, 12);
-    connection = await pool.getConnection();
-    await connection.beginTransaction();
-
-    const [cliente] = await connection.query(
-      `INSERT INTO clientes
-        (nombre_funcionario, correo, tipo_institucion, estado_verificacion,
-         dominio_verificado, datos_registro_cifrados, autorizacion_general, acepta_terminos_en)
-       VALUES (?, ?, ?, 'borrador', FALSE, ?, FALSE, NOW())`,
-      [
-        cifrar(datos.nombreCompleto),
-        cifrar(datos.correo),
-        tipo,
-        Object.keys(especificos).length ? cifrar(JSON.stringify(especificos)) : null
-      ]
-    );
-    const [usuario] = await connection.query(
-      'INSERT INTO usuarios (correo, password_hash, cliente_id, rol) VALUES (?, ?, ?, ?)',
-      [datos.correo, hash, cliente.insertId, 'cliente']
-    );
-    await registrarHistorial(connection, {
-      clienteId: cliente.insertId,
-      anterior: null,
-      nuevo: 'borrador',
-      evento: 'registro',
-      actorUsuarioId: usuario.insertId,
-      actorTipo: 'cliente'
-    });
-    await connection.commit();
-
-    res.status(201).json({
-      ok: true,
-      correo: datos.correo,
-      id: usuario.insertId,
-      clienteId: cliente.insertId,
-      rol: 'cliente',
-      tipoInstitucion: tipo,
-      estadoVerificacion: 'borrador',
-      correoInstitucional: dominioCoincide(tipo, datos.correo),
-      mensaje: 'Tu cuenta quedó creada. Inicia sesión para confirmar tu correo. Si más adelante compras productos que exigen verificación, te pediremos los datos necesarios en ese momento.'
-    });
+    return res.status(202).json(RESPUESTA_REGISTRO);
   } catch (err) {
-    if (connection) {
-      try {
-        await connection.rollback();
-      } catch (rollbackError) {
-        console.error('[auth] No se pudo revertir el registro:', rollbackError.code || 'REGISTRATION_ROLLBACK_FAILED');
-      }
-    }
-    if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'No se pudo crear la cuenta con esos datos.' });
-    }
-    console.error('[auth] No se pudo crear la cuenta:', err.code || 'REGISTRATION_FAILED');
-    res.status(500).json({ error: 'Error creando la cuenta' });
-  } finally {
-    if (connection) connection.release();
+    console.error('[auth] No se pudo registrar la solicitud:', err.code || 'REGISTRATION_FAILED');
+    return res.status(500).json({ error: 'No se pudo recibir la solicitud. Inténtalo de nuevo.' });
   }
 });
 
+const MENSAJES_ESTADO_CUENTA = {
+  pendiente: ['CUENTA_PENDIENTE', 'Tu solicitud de cuenta está en revisión. Te avisaremos por correo cuando un administrador la apruebe.'],
+  rechazada: ['CUENTA_RECHAZADA', 'Tu solicitud de cuenta no fue aprobada. Revisa el correo que te enviamos; puedes registrarte de nuevo con los datos correctos.'],
+  suspendida: ['CUENTA_SUSPENDIDA', 'Tu cuenta está suspendida. Comunícate con el administrador de la plataforma.']
+};
 
-// POST /api/auth/login
+// POST /api/auth/login -> paso 1: correo + contraseña + captcha.
+// Si el correo no existe se compara contra un hash de relleno (mismo tiempo).
+// El estado de la cuenta solo se revela después de validar la contraseña.
 router.post('/login', limitarLogin, async (req, res) => {
   try {
+    if (!captchaValido(req.body)) return res.status(400).json(ERROR_CAPTCHA);
     const correo = String(req.body?.correo || '').trim().toLowerCase();
     const { password } = req.body || {};
-    if (!correo || typeof password !== 'string' || !password) {
+    if (!correo || typeof password !== 'string' || !password || password.length > 72) {
       return res.status(400).json({ error: 'Correo y contraseña son obligatorios' });
     }
 
-    const [filas] = await pool.query('SELECT * FROM usuarios WHERE correo = ?', [correo]);
-    if (!filas.length) {
+    const [filas] = await pool.query(
+      'SELECT id, correo, password_hash, estado_cuenta FROM usuarios WHERE correo = ?',
+      [correo]
+    );
+    const usuario = filas[0];
+    const coincide = await compararContrasena(password, usuario?.password_hash);
+    if (!usuario || !coincide) {
       return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
     }
-
-    const usuario = filas[0];
-    const coincide = await bcrypt.compare(password, usuario.password_hash);
-    if (!coincide) {
-      return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
+    if (usuario.estado_cuenta !== 'activa') {
+      const [code, error] = MENSAJES_ESTADO_CUENTA[usuario.estado_cuenta] || MENSAJES_ESTADO_CUENTA.suspendida;
+      return res.status(403).json({ code, error });
     }
 
     const reto = await crearRetoMfa(usuario);
@@ -314,20 +266,13 @@ router.post('/login', limitarLogin, async (req, res) => {
       challengeId: reto.retoId,
       expiresIn: MFA_CODIGO_VIGENCIA_MINUTOS * 60,
       correoEnmascarado: reto.correoEnmascarado,
-      deliveryUnconfirmed: reto.entregaNoConfirmada === true
+      deliveryUnconfirmed: false
     });
   } catch (err) {
-    if (typeof err.code === 'string' && err.code.startsWith('N8N_MFA_')) {
-      console.error('[auth] Falló la entrega MFA de inicio de sesión:', err.code);
-      return res.status(422).json({
-        success: false,
-        message: 'El servicio de verificación temporal no se encuentra disponible. Por favor, intente más tarde.'
-      });
-    }
     if (err.status) {
       return res.status(err.status).json({ error: err.message });
     }
-    console.error('[auth] Error iniciando el desafío MFA:', err.message);
+    console.error('[auth] Error iniciando el desafío MFA:', err.code || 'MFA_CHALLENGE_FAILED');
     res.status(503).json({ error: 'No fue posible iniciar la verificación de seguridad. Intenta de nuevo más tarde.' });
   }
 });
@@ -346,7 +291,7 @@ router.post('/mfa/verificar', limitarVerificacionMfa, async (req, res) => {
     const [retos] = await connection.query(
       `SELECT r.usuario_id, r.codigo_hash, r.estado, r.intentos, r.proposito,
               (r.expira_en > NOW()) AS vigente,
-              u.correo, u.rol, u.cliente_id, u.session_version, u.debe_cambiar_password,
+              u.correo, u.rol, u.cliente_id, u.session_version, u.debe_cambiar_password, u.estado_cuenta,
               c.estado_verificacion, c.institucion_aprobada, c.tipo_institucion
        FROM retos_mfa r
        JOIN usuarios u ON u.id = r.usuario_id
@@ -355,7 +300,8 @@ router.post('/mfa/verificar', limitarVerificacionMfa, async (req, res) => {
        FOR UPDATE`,
       [retoId]
     );
-    if (!retos.length || retos[0].estado !== 'pendiente') {
+    // Una cuenta suspendida entre el paso 1 y el 2 no completa el acceso.
+    if (!retos.length || retos[0].estado !== 'pendiente' || retos[0].estado_cuenta !== 'activa') {
       await connection.rollback();
       return res.status(401).json({ error: 'El código no es válido o ya no está disponible. Inicia sesión nuevamente.' });
     }
@@ -489,27 +435,7 @@ router.post('/mfa/reenviar', limitarReenvioMfa, async (req, res) => {
       return res.status(429).json({ error: 'No se pudo reenviar todavía. Intenta de nuevo en un minuto.' });
     }
 
-    try {
-      await enviarCodigoMfa({
-        correo: retos[0].correo,
-        codigo
-      });
-    } catch (err) {
-      const codigoError = err.code || 'EMAIL_DELIVERY_FAILED';
-      if (entregaMfaNoConfirmada(err)) {
-        console.error('[auth] Reenvío MFA no confirmado; el reto sigue activo:', codigoError);
-        return res.json({
-          ok: true,
-          deliveryUnconfirmed: true,
-          expiresIn: MFA_CODIGO_VIGENCIA_MINUTOS * 60,
-          correoEnmascarado: enmascararCorreo(retos[0].correo)
-        });
-      }
-      await pool.query("UPDATE retos_mfa SET estado = 'cancelado' WHERE reto_id = ? AND proposito = 'inicio_sesion' AND estado = 'pendiente'", [retoId]);
-      console.error('[auth] No se pudo reenviar el código MFA:', codigoError);
-      return res.status(503).json({ error: 'No fue posible reenviar el código. Inicia sesión nuevamente más tarde.' });
-    }
-
+    enviarCodigoMfa({ correo: retos[0].correo, codigo });
     res.json({
       ok: true,
       expiresIn: MFA_CODIGO_VIGENCIA_MINUTOS * 60,
@@ -551,7 +477,7 @@ router.post('/refresh', async (req, res) => {
     const hash = crypto.createHash('sha256').update(refreshToken).digest('hex');
     const [filas] = await pool.query(
       `SELECT rt.id, rt.usuario_id, rt.fecha_expiracion, rt.mfa_verificado_en,
-              u.correo, u.rol, u.cliente_id, u.session_version,
+              u.correo, u.rol, u.cliente_id, u.session_version, u.estado_cuenta,
               c.estado_verificacion, c.institucion_aprobada, c.tipo_institucion
        FROM refresh_tokens rt
        JOIN usuarios u ON u.id = rt.usuario_id
@@ -560,7 +486,7 @@ router.post('/refresh', async (req, res) => {
       [hash]
     );
 
-    if (!filas.length) {
+    if (!filas.length || filas[0].estado_cuenta !== 'activa') {
       return res.status(401).json({ error: 'Refresh token inválido' });
     }
 
@@ -644,13 +570,19 @@ async function requiereAutenticacion(req, res, next) {
   }
 
   try {
+    // Estado y rol se leen de la base en cada petición: suspender una cuenta o
+    // quitarle el rol surte efecto de inmediato, aunque el JWT siga vigente.
     const [filas] = await pool.query(
-      'SELECT session_version, debe_cambiar_password FROM usuarios WHERE id = ?',
+      'SELECT session_version, debe_cambiar_password, estado_cuenta, rol FROM usuarios WHERE id = ?',
       [usuarioId]
     );
     if (!filas.length || Number(filas[0].session_version || 0) !== versionToken) {
       return res.status(401).json({ error: 'La sesión fue revocada. Inicia sesión nuevamente.' });
     }
+    if (filas[0].estado_cuenta !== 'activa') {
+      return res.status(403).json({ code: 'CUENTA_NO_ACTIVA', error: 'Tu cuenta no está habilitada.' });
+    }
+    usuario = { ...usuario, rol: filas[0].rol };
     // Credencial inicial (superadministrador o administrador sembrado): hasta
     // cambiarla solo se permite consultar la cuenta y cambiar la contraseña.
     if (filas[0].debe_cambiar_password && !RUTAS_CON_CAMBIO_PENDIENTE.has(`${req.method} ${req.baseUrl}${req.path}`)) {

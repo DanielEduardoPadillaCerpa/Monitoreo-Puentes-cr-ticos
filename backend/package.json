@@ -10,7 +10,10 @@
     "test": "npm run test:assistant && npm run test:legacy",
     "test:assistant": "jest --runInBand",
     "test:legacy": "node --test test/*.test.js",
-    "test:integration": "jest --runInBand --testMatch \"**/test/integration/*.int.spec.js\""
+    "test:integration": "jest --runInBand --testMatch \"**/test/integration/*.int.spec.js\"",
+    "claves:generar": "node scripts/generar-claves.js --escribir",
+    "padron:importar": "node scripts/importar-padron.js",
+    "medir": "node scripts/medir-rendimiento.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

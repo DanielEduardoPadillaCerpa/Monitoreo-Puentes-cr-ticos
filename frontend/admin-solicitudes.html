@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Solicitudes de cuenta — Panel administrativo</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="css/theme-modern.css">
+<link rel="stylesheet" href="css/global-ui.css">
+<link rel="stylesheet" href="css/admin-console.css">
+<link rel="stylesheet" href="css/verificacion.css">
+<style>
+  .verif-page { background: #f8fafc; min-height: 100vh; }
+  .sol-detalle dt { font-size: .74rem; text-transform: uppercase; letter-spacing: .04em; color: #64748b; }
+  .sol-detalle dd { margin-bottom: .55rem; overflow-wrap: anywhere; }
+  .sol-sticky { position: sticky; top: 1rem; }
+  .sol-comparar { width: 100%; font-size: .9rem; }
+  .sol-comparar th, .sol-comparar td { padding: .45rem .5rem; border-bottom: 1px solid rgba(11,45,74,.1); vertical-align: top; }
+  .sol-comparar th { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: #64748b; }
+  .vf-tabla tbody tr { cursor: pointer; }
+  .vf-tabla tbody tr:focus-visible { outline: 2px solid #0B2D4A; outline-offset: -2px; }
+  @media (max-width: 991px) { .sol-sticky { position: static; } }
+</style>
+</head>
+<body class="verif-page admin-console-page" data-gl-nav="off" data-gl-cart="off" data-gl-chat="off">
+<script src="js/global-layout.js"></script>
+<nav class="navbar navbar-expand-lg navbar-institucional py-2">
+  <div class="container">
+    <a class="navbar-brand" href="landing.html" aria-label="Suministros Institucionales - Ir al inicio">
+      <img class="brand-logo" src="http://localhost:8081/img/logo-suministros.png" alt="Suministros Institucionales" width="171" height="46">
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav1" aria-label="Menú">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="nav1">
+      <ul class="navbar-nav ms-auto gap-lg-3 align-items-lg-center">
+        <li class="nav-item"><a class="nav-link" href="admin-dashboard.html" data-i18n="nav_dashboard">Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link active" href="admin-solicitudes.html" aria-current="page">Solicitudes <span class="badge rounded-pill text-bg-danger badge-solicitudes" hidden></span></a></li>
+        <li class="nav-item"><a class="nav-link" href="admin-clientes.html">Clientes</a></li>
+        <li class="nav-item"><a class="nav-link" href="admin-verificaciones.html">Verificaciones</a></li>
+        <li class="nav-item"><a class="nav-link" href="admin-productos.html">Productos</a></li>
+        <li class="nav-item"><a class="nav-link nav-alertas-stock" href="admin-productos.html?filtro=bajo">Alertas de stock</a></li>
+        <li class="nav-item"><a class="nav-link" href="admin-pedidos.html">Pedidos</a></li>
+        <li class="nav-item d-flex align-items-center" id="auth-nav-slot"></li>
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<main class="container py-4">
+  <h1 class="h3 fw-bold mb-1 admin-titulo-sobre-fondo">Solicitudes de cuenta</h1>
+  <p class="mb-3 admin-texto-sobre-fondo">Cada registro se compara contra el padrón institucional (NIT, nombre e institución). Nadie accede a la plataforma hasta que lo apruebes. Cada decisión queda auditada.</p>
+  <div id="aviso" class="alert alert-warning" hidden></div>
+
+  <div class="vf-conteos" id="filtros" role="group" aria-label="Filtrar por estado">
+    <button type="button" class="activo" data-estado="pendiente">Pendientes <span id="conteo-pendientes"></span></button>
+    <button type="button" data-estado="aprobada">Aprobadas</button>
+    <button type="button" data-estado="rechazada">Rechazadas</button>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="vf-panel p-2 vf-tabla-wrap">
+        <table class="vf-tabla">
+          <thead><tr><th>Correo</th><th>Institución</th><th>Verificación</th><th>Fecha</th></tr></thead>
+          <tbody id="lista"><tr><td colspan="4" class="text-muted">Cargando…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="small text-muted mt-2 mb-0">La lista no muestra NIT ni nombres: se descifran solo al abrir una solicitud. Se actualiza sola cada 12 segundos.</p>
+    </div>
+    <div class="col-lg-6">
+      <div class="vf-panel sol-sticky" id="detalle" aria-live="polite">
+        <p class="text-muted mb-0">Selecciona una solicitud para revisarla.</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/admin-solicitudes-contador.js"></script>
+<script>
+const RESULTADOS = {
+  coincide: ['cumplido', 'Coincide'],
+  nit_no_existe: ['obligatorio', 'NIT no existe'],
+  nombre_no_coincide: ['obligatorio', 'Nombre no coincide'],
+  institucion_no_coincide: ['obligatorio', 'Institución no coincide'],
+  persona_inactiva: ['condicional', 'Inactivo en el padrón'],
+  padron_no_disponible: ['condicional', 'Padrón no disponible']
+};
+const EXPLICACION = {
+  coincide: 'NIT, nombre e institución coinciden con el padrón.',
+  nit_no_existe: 'Ese NIT no aparece en el padrón institucional.',
+  nombre_no_coincide: 'El NIT existe, pero ningún funcionario de esa entidad tiene ese nombre.',
+  institucion_no_coincide: 'La persona está en el padrón, pero en otra institución distinta a la que declaró.',
+  persona_inactiva: 'La persona figura en el padrón como inactiva.',
+  padron_no_disponible: 'No se pudo consultar el padrón en ese momento.'
+};
+const INSTITUCIONES = { policia: 'Policía', defensa: 'Defensa', bomberos: 'Bomberos', socorro: 'Socorro', penitenciario: 'Penitenciario', corporativo: 'Corporativo' };
+const PAGINA = 'admin-solicitudes.html';
+let estadoFiltro = 'pendiente';
+let seleccionada = null;
+let solicitudes = [];
+
+const esc = t => { const s = document.createElement('span'); s.textContent = t == null ? '' : String(t); return s.innerHTML; };
+const fecha = v => v ? new Date(v).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+const etiqueta = r => { const [clase, texto] = RESULTADOS[r] || ['', r]; return `<span class="vf-etiqueta ${clase}">${esc(texto)}</span>`; };
+const institucion = id => INSTITUCIONES[id] || id || '—';
+
+async function api(ruta, opciones = {}) {
+  if (!await authAsegurarTokenValido()) {
+    window.location.replace('login.html?redirect=' + PAGINA);
+    throw new Error('Sesión vencida');
+  }
+  const headers = { ...(opciones.headers || {}), Authorization: 'Bearer ' + authLeer().token };
+  if (opciones.body) headers['Content-Type'] = 'application/json';
+  const resp = await fetch(API_BASE + ruta, { ...opciones, headers });
+  if (resp.status === 401) {
+    window.location.replace('login.html?redirect=' + PAGINA);
+    throw new Error('Sesión vencida');
+  }
+  const datos = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error(datos.error || 'Error ' + resp.status), { datos, status: resp.status });
+  return datos;
+}
+
+function pintarLista() {
+  const cuerpo = document.getElementById('lista');
+  if (!solicitudes.length) {
+    cuerpo.innerHTML = `<tr><td colspan="4" class="text-muted">No hay solicitudes ${estadoFiltro === 'pendiente' ? 'pendientes' : estadoFiltro + 's'}.</td></tr>`;
+    return;
+  }
+  cuerpo.innerHTML = solicitudes.map(s => `
+    <tr tabindex="0" data-id="${s.id}" class="${s.id === seleccionada ? 'seleccionada' : ''}">
+      <td>${esc(s.correo)}</td>
+      <td>${esc(institucion(s.tipoInstitucion))}</td>
+      <td>${etiqueta(s.resultado)}</td>
+      <td class="text-nowrap">${fecha(s.creadoEn)}</td>
+    </tr>`).join('');
+}
+
+async function cargarLista() {
+  try {
+    const datos = await api('/api/admin/solicitudes?estado=' + estadoFiltro);
+    solicitudes = datos.solicitudes;
+    pintarLista();
+    document.getElementById('aviso').hidden = true;
+  } catch (err) {
+    if (err.status === 403) {
+      const aviso = document.getElementById('aviso');
+      aviso.textContent = err.datos?.permisoRequerido
+        ? 'Tu cuenta administrativa no tiene el permiso "clientes.gestionar". Pídeselo a un superadministrador.'
+        : err.message;
+      aviso.hidden = false;
+      document.getElementById('lista').innerHTML = '';
+    }
+  }
+}
+
+function filaComparacion(titulo, declarado, padron) {
+  return `<tr><th scope="row">${titulo}</th><td>${esc(declarado || '—')}</td><td>${esc(padron || '—')}</td></tr>`;
+}
+
+async function abrir(id) {
+  seleccionada = id;
+  pintarLista();
+  const panel = document.getElementById('detalle');
+  panel.innerHTML = '<p class="text-muted mb-0">Cargando y verificando contra el padrón…</p>';
+  try {
+    const d = await api('/api/admin/solicitudes/' + id);
+    const p = d.padron || {};
+    const tiposDelNit = p.tiposDelNit ? p.tiposDelNit.map(institucion).join(', ') : null;
+    panel.innerHTML = `
+      <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+        <h2 class="h5 mb-0">Solicitud #${d.id}</h2>
+        ${etiqueta(d.resultadoAhora)}
+      </div>
+      <p class="small mb-3">${esc(EXPLICACION[d.resultadoAhora] || '')}
+        ${d.resultadoAhora !== d.resultadoAlRegistrar ? `<br><span class="text-muted">Al registrarse el resultado fue: ${esc(RESULTADOS[d.resultadoAlRegistrar]?.[1] || d.resultadoAlRegistrar)}.</span>` : ''}</p>
+      <dl class="sol-detalle row mb-2">
+        <dt class="col-4">Correo</dt><dd class="col-8">${esc(d.correo)}</dd>
+        <dt class="col-4">Recibida</dt><dd class="col-8">${fecha(d.creadoEn)}</dd>
+      </dl>
+      <table class="sol-comparar mb-3">
+        <thead><tr><th></th><th>Declarado</th><th>Padrón</th></tr></thead>
+        <tbody>
+          ${filaComparacion('Nombre', d.declarado.nombre, p.nombre)}
+          ${filaComparacion('NIT', d.declarado.nit, p.nombre ? d.declarado.nit : (tiposDelNit ? d.declarado.nit + ' (existe)' : null))}
+          ${filaComparacion('Institución', institucion(d.declarado.tipoInstitucion), p.tipoInstitucion ? institucion(p.tipoInstitucion) : tiposDelNit)}
+          ${p.entidad ? filaComparacion('Entidad', '', p.entidad) : ''}
+        </tbody>
+      </table>
+      ${d.estado === 'pendiente' ? `
+        ${d.resultadoAhora !== 'coincide' ? `
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" id="confirmar">
+            <label class="form-check-label small" for="confirmar">Revisé la evidencia y apruebo aunque la verificación <strong>no coincide</strong>.</label>
+          </div>` : ''}
+        <div class="d-flex gap-2 mb-3">
+          <button class="btn btn-success" id="btn-aprobar">Aprobar</button>
+        </div>
+        <label class="form-label small" for="motivo">Motivo del rechazo (se envía al solicitante)</label>
+        <textarea class="form-control form-control-sm mb-2" id="motivo" rows="2" maxlength="500" placeholder="Ej.: el NIT no corresponde a la entidad indicada."></textarea>
+        <button class="btn btn-outline-danger btn-sm" id="btn-rechazar">Rechazar</button>
+        <div id="decision-msg" class="small mt-2" role="status"></div>`
+      : `<p class="mb-0"><span class="vf-etiqueta ${d.estado === 'aprobada' ? 'cumplido' : 'obligatorio'}">${d.estado === 'aprobada' ? 'Aprobada' : 'Rechazada'}</span>
+           <span class="small text-muted ms-1">${fecha(d.decididaEn)}${d.decididaPor ? ' por ' + esc(d.decididaPor) : ''}</span></p>
+         ${d.motivoRechazo ? `<p class="small mt-2 mb-0"><strong>Motivo:</strong> ${esc(d.motivoRechazo)}</p>` : ''}`}`;
+    if (d.estado === 'pendiente') {
+      document.getElementById('btn-aprobar').addEventListener('click', () => decidir(d.id, 'aprobar'));
+      document.getElementById('btn-rechazar').addEventListener('click', () => decidir(d.id, 'rechazar'));
+    }
+  } catch (err) {
+    panel.innerHTML = `<div class="alert alert-danger mb-0">${esc(err.message)}</div>`;
+  }
+}
+
+// Actualiza la interfaz al instante (sin recargar): la fila sale de la lista
+// y el contador baja; si la operación falla, se restaura.
+async function decidir(id, accion) {
+  const msg = document.getElementById('decision-msg');
+  const cuerpo = {};
+  if (accion === 'aprobar') {
+    const casilla = document.getElementById('confirmar');
+    if (casilla && !casilla.checked) {
+      msg.className = 'small mt-2 text-danger';
+      msg.textContent = 'La verificación no coincide: marca la casilla de confirmación para aprobar.';
+      return;
+    }
+    if (casilla) cuerpo.confirmar = true;
+  } else {
+    cuerpo.motivo = document.getElementById('motivo').value.trim();
+    if (cuerpo.motivo.length < 5) {
+      msg.className = 'small mt-2 text-danger';
+      msg.textContent = 'Escribe el motivo del rechazo (mínimo 5 caracteres).';
+      return;
+    }
+  }
+  document.querySelectorAll('#btn-aprobar, #btn-rechazar').forEach(b => { b.disabled = true; });
+  const respaldo = solicitudes;
+  solicitudes = solicitudes.filter(s => s.id !== id);
+  pintarLista();
+  ContadorSolicitudes.ajustar(-1);
+  try {
+    await api(`/api/admin/solicitudes/${id}/${accion}`, { method: 'POST', body: JSON.stringify(cuerpo) });
+    mostrarNotificacion(accion === 'aprobar' ? 'Solicitud aprobada: la cuenta ya puede iniciar sesión.' : 'Solicitud rechazada.', 'success');
+    abrir(id);
+  } catch (err) {
+    solicitudes = respaldo;
+    pintarLista();
+    ContadorSolicitudes.ajustar(+1);
+    msg.className = 'small mt-2 text-danger';
+    msg.textContent = err.message;
+    document.querySelectorAll('#btn-aprobar, #btn-rechazar').forEach(b => { b.disabled = false; });
+    if (err.datos?.code === 'YA_DECIDIDA') { cargarLista(); abrir(id); }
+  } finally {
+    ContadorSolicitudes.refrescar();
+  }
+}
+
+document.getElementById('lista').addEventListener('click', e => {
+  const fila = e.target.closest('tr[data-id]');
+  if (fila) abrir(Number(fila.dataset.id));
+});
+document.getElementById('lista').addEventListener('keydown', e => {
+  const fila = e.target.closest('tr[data-id]');
+  if (fila && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); abrir(Number(fila.dataset.id)); }
+});
+document.getElementById('filtros').addEventListener('click', e => {
+  const boton = e.target.closest('button[data-estado]');
+  if (!boton) return;
+  estadoFiltro = boton.dataset.estado;
+  document.querySelectorAll('#filtros button').forEach(b => b.classList.toggle('activo', b === boton));
+  seleccionada = null;
+  document.getElementById('detalle').innerHTML = '<p class="text-muted mb-0">Selecciona una solicitud para revisarla.</p>';
+  cargarLista();
+});
+
+// Cuando el contador cambia (nueva solicitud o decisión de otro admin), se refresca la lista.
+ContadorSolicitudes.alCambiar(pendientes => {
+  document.getElementById('conteo-pendientes').textContent = pendientes ? `(${pendientes})` : '';
+  if (estadoFiltro === 'pendiente') cargarLista();
+});
+
+(async function iniciar() {
+  const sesion = authLeer();
+  if (!sesion || sesion.rol !== 'admin') {
+    window.location.replace('login.html?redirect=' + PAGINA);
+    return;
+  }
+  authRenderNavbar();
+  await cargarLista();
+})();
+</script>
+</body>
+</html>

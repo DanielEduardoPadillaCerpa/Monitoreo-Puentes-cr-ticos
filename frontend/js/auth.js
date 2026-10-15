@@ -119,6 +119,7 @@ function authRenderNavbar() {
     : 'general';
   document.body.dataset.institution = institucion;
   document.body.dataset.authenticated = String(temaSesion?.mfaVerified === true);
+  document.body.dataset.rol = temaSesion?.mfaVerified === true ? (temaSesion.rol || '') : '';
   const imagenesTenant = {
     policia: 'image_ab9291c8.jpg',
     defensa: 'defensa-unsplash.jpg',

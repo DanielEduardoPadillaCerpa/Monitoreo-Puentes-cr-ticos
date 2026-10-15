@@ -6,6 +6,8 @@ const request = require('supertest');
 
 process.env.JWT_SECRET = 'phase-zero-test-secret-with-enough-length';
 process.env.NODE_ENV = 'test';
+process.env.ENC_KEY = '1'.repeat(64);
+process.env.HMAC_KEY = '2'.repeat(64);
 
 jest.mock('../src/db', () => ({
   pool: {
@@ -17,14 +19,27 @@ jest.mock('../src/crypto', () => ({
   cifrar: value => value,
   descifrar: value => value
 }));
+// El registro verificado (padrón, cifrado, lote transaccional) se prueba en
+// test/registro-verificado.test.js; aquí solo interesa el contrato HTTP.
+jest.mock('../src/seguridad/registroVerificado', () => ({
+  procesarRegistro: jest.fn(),
+  insertarRetoMfa: jest.fn()
+}));
 jest.mock('../src/auditoria', () => ({
   registrarAuditoria: jest.fn().mockResolvedValue(undefined)
 }));
 
 const { pool } = require('../src/db');
+const { procesarRegistro } = require('../src/seguridad/registroVerificado');
+const { crearReto } = require('../src/seguridad/captcha');
 const authRouter = require('../src/routes/auth').router;
 const clientesRouter = require('../src/routes/clientes');
 const checkoutRouter = require('../src/routes/checkout');
+
+
+// requiereAutenticacion lee de la base session_version, estado_cuenta y rol.
+// Convención de estas pruebas: uid < 10 es administrador; el resto, cliente.
+const filaSesion = (params, extra = {}) => ({ session_version: 0, estado_cuenta: 'activa', rol: Number(params?.[0]) < 10 ? 'admin' : 'cliente', ...extra });
 
 function appConRutas() {
   const app = express();
@@ -58,27 +73,32 @@ function filaStaff(sql) {
 }
 
 beforeEach(() => {
-  pool.query.mockReset().mockImplementation(async sql => {
-    if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[{ session_version: 0 }], []];
+  pool.query.mockReset().mockImplementation(async (sql, params) => {
+    if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[filaSesion(params)], []];
     if (filaStaff(sql)) return filaStaff(sql);
     if (/FROM staff_permisos/i.test(String(sql))) return [[{ permiso: 'clientes.gestionar' }], []];
     if (/SELECT id FROM clientes/i.test(String(sql))) return [[{ id: 5 }], []];
     return [{ insertId: 1, affectedRows: 1 }, []];
   });
   pool.getConnection.mockReset();
+  procesarRegistro.mockReset();
 });
 
-// Registro mínimo válido de Bomberos: los datos de la organización, el
-// documento de identidad y la evidencia se piden solo si una compra lo exige.
+// Registro verificado válido de Bomberos: nombre, NIT de la entidad, correo,
+// contraseña, aceptaciones y captcha resuelto.
 function registroValido(cambios = {}) {
+  const { id, respuesta } = crearReto();
   return {
     tipoInstitucion: 'bomberos',
     tipoCuerpo: 'voluntario',
     nombreCompleto: 'Comprador de prueba',
+    nit: '999000003-7',
     correo: 'comprador@example.test',
     password: 'ClaveSegura2026!',
     aceptaTerminos: true,
     aceptaTratamiento: true,
+    captchaId: id,
+    captchaRespuesta: respuesta,
     ...cambios
   };
 }
@@ -94,8 +114,8 @@ describe('Fase 0 - registro y control de acceso', () => {
     expect(pool.getConnection).not.toHaveBeenCalled();
   });
 
-  test('el registro mínimo rechaza datos que solo se piden al verificar (NIT, teléfono, antecedentes)', async () => {
-    for (const extra of [{ nit: '800197268-4' }, { telefono: '3001234567' }, { numeroConsultaAntecedentes: '123' }, { estadoVerificacion: 'aprobado' }]) {
+  test('el registro rechaza datos ajenos al formulario (teléfono, antecedentes, estado) y exige el NIT', async () => {
+    for (const extra of [{ nit: undefined }, { telefono: '3001234567' }, { numeroConsultaAntecedentes: '123' }, { estadoVerificacion: 'aprobado' }]) {
       const response = await request(appConRutas()).post('/api/auth/registro').send(registroValido(extra));
       expect(response.status).toBe(400);
     }
@@ -118,39 +138,38 @@ describe('Fase 0 - registro y control de acceso', () => {
     expect(pool.getConnection).not.toHaveBeenCalled();
   });
 
-  test('el autorregistro crea cliente y usuario en una transacción y no concede autorización', async () => {
-    const connection = crearConexionMock();
+  test('el registro válido crea una solicitud pendiente y responde 202 genérico', async () => {
+    procesarRegistro.mockResolvedValueOnce({ solicitudId: 31, resultado: 'coincide' });
     const response = await request(appConRutas())
       .post('/api/auth/registro')
       .send(registroValido());
 
-    expect(response.status).toBe(201);
-    expect(response.body.estadoVerificacion).toBe('borrador');
-    expect(connection.beginTransaction).toHaveBeenCalledTimes(1);
-    expect(connection.commit).toHaveBeenCalledTimes(1);
-    expect(connection.rollback).not.toHaveBeenCalled();
-    const insercionCliente = connection.query.mock.calls.find(([sql]) => /INSERT INTO clientes/i.test(sql));
-    expect(insercionCliente).toBeDefined();
-    expect(insercionCliente[0]).toMatch(/autorizacion_general, acepta_terminos_en\)\s*VALUES\s*\(\?, \?, \?, 'borrador', FALSE, \?, FALSE, NOW\(\)\)/i);
-    expect(insercionCliente[0]).not.toMatch(/nit|telefono|direccion/i);
-    expect(connection.query.mock.calls.some(([sql]) => /INSERT INTO usuarios/i.test(sql))).toBe(true);
-    expect(response.body.clienteId).toBe(71);
+    expect(response.status).toBe(202);
+    expect(response.body.estado).toBe('solicitud_recibida');
+    expect(JSON.stringify(response.body)).not.toMatch(/31|coincide|clienteId|token/);
+    const [datos] = procesarRegistro.mock.calls[0];
+    expect(datos).not.toHaveProperty('captchaId');
+    expect(datos).not.toHaveProperty('autorizacionGeneral');
   });
 
-  test('el registro revierte cliente y usuario si falla la creación del usuario', async () => {
-    const connection = crearConexionMock();
-    connection.query.mockImplementation(async sql => {
-      if (/INSERT INTO clientes/i.test(sql)) return [{ insertId: 72, affectedRows: 1 }, []];
-      if (/INSERT INTO usuarios/i.test(sql)) throw Object.assign(new Error('duplicate'), { code: 'ER_DUP_ENTRY' });
-      return [{ affectedRows: 1 }, []];
-    });
+  test('un correo ya registrado recibe exactamente la misma respuesta', async () => {
+    procesarRegistro.mockResolvedValueOnce({ solicitudId: 32, resultado: 'nit_no_existe' });
+    const nueva = await request(appConRutas()).post('/api/auth/registro').send(registroValido());
+    procesarRegistro.mockResolvedValueOnce({ existente: true });
+    const repetida = await request(appConRutas()).post('/api/auth/registro').send(registroValido());
+
+    expect(repetida.status).toBe(nueva.status);
+    expect(repetida.body).toEqual(nueva.body);
+  });
+
+  test('sin captcha resuelto no se procesa el registro', async () => {
     const response = await request(appConRutas())
       .post('/api/auth/registro')
-      .send(registroValido());
+      .send(registroValido({ captchaRespuesta: 'x' }));
 
-    expect(response.status).toBe(409);
-    expect(connection.rollback).toHaveBeenCalledTimes(1);
-    expect(connection.commit).not.toHaveBeenCalled();
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('CAPTCHA_INVALIDO');
+    expect(procesarRegistro).not.toHaveBeenCalled();
   });
 
   test('POST /api/clientes requiere autenticación y no crea cliente públicamente', async () => {
@@ -199,8 +218,8 @@ describe('Fase 0 - registro y control de acceso', () => {
   });
 
   function mockClienteParaPut({ permisos, estado = 'aprobado' }) {
-    pool.query.mockImplementation(async sql => {
-      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[{ session_version: 0 }], []];
+    pool.query.mockImplementation(async (sql, params) => {
+      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[filaSesion(params)], []];
       if (filaStaff(sql)) return filaStaff(sql);
       if (/FROM clientes WHERE id/i.test(String(sql))) return [[{ id: 5, autorizacion_general: 0, estado_verificacion: estado }], []];
       if (/FROM staff_permisos/i.test(String(sql))) return [permisos.map(permiso => ({ permiso })), []];
@@ -283,8 +302,8 @@ describe('Fase 0 - registro y control de acceso', () => {
   test('el consentimiento para guardar antecedentes no concede autorización de compra restringida', async () => {
     const token = jwt.sign({ uid: 10, clienteId: 5, rol: 'cliente', mfa: true }, process.env.JWT_SECRET);
     let insertado = false;
-    pool.query.mockImplementation(async sql => {
-      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[{ session_version: 0 }], []];
+    pool.query.mockImplementation(async (sql, params) => {
+      if (/SELECT session_version[^;]*FROM usuarios/i.test(String(sql))) return [[filaSesion(params)], []];
       if (/SELECT id FROM clientes/i.test(String(sql))) return [[{ id: 5 }], []];
       if (/INSERT INTO datos_sensibles/i.test(String(sql))) {
         insertado = true;

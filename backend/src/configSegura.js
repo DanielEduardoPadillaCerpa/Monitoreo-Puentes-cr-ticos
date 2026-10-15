@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { anilloConfigurado, proteccionIdentificadoresDisponible } = require('./crypto');
+const { claves } = require('./seguridad/cifradoCampos');
 
 // Valores que delatan un secreto de ejemplo o escrito a mano.
 const PATRON_EJEMPLO = /cambia|cambiar|replace_|change_?me|example|ejemplo|secreto|password|tu_clave|tu_c/i;
@@ -32,7 +33,16 @@ function validarConfiguracionSegura({ produccion = process.env.NODE_ENV === 'pro
       (produccion ? errores : avisos).push(`${variable} falta, es corto o parece un valor de ejemplo.`);
     }
   };
-  revisar('JWT_SECRET');
+  // Registro verificado: estas tres impiden arrancar en cualquier entorno.
+  // Se generan con: node scripts/generar-claves.js --escribir
+  if (secretoDebil(process.env.JWT_SECRET)) {
+    errores.push('JWT_SECRET falta, tiene menos de 32 caracteres o parece un valor de ejemplo.');
+  }
+  try {
+    claves();
+  } catch (err) {
+    errores.push(err.message);
+  }
   revisar('MFA_TOKEN_PEPPER');
   if (process.env.CRYPTO_KEYS) {
     if (!anilloConfigurado()) errores.push('CRYPTO_KEYS o CRYPTO_KEY_ACTIVA no son válidos.');

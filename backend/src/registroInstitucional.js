@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const { INSTITUCIONES } = require('./tenancy');
+const { normalizarNit: normalizarNitRegistro, nombreCompletoValido } = require('./seguridad/normalizacion');
 
 // Tipos de comprador admitidos en el autorregistro. Reutilizan los
 // identificadores de tenancy.js (y por tanto productos.institucion_id); 'general'
@@ -211,7 +212,8 @@ for (const tipo of Object.values(TIPOS_COMPRADOR)) {
 // datos de la organización, el documento de identidad y la evidencia se piden
 // después, únicamente si una compra lo requiere. El campo específico del tipo
 // (fuerza, organismo, clase de cuerpo, sector) es opcional y no sensible.
-MENSAJES_CAMPO.nombreCompleto = 'Indica tu nombre completo (mínimo 5 caracteres).';
+MENSAJES_CAMPO.nombreCompleto = 'Escribe tu nombre completo: al menos un nombre y un apellido.';
+MENSAJES_CAMPO.nitRegistro = 'Escribe el NIT de tu entidad (solo números; el dígito de verificación es opcional).';
 MENSAJES_CAMPO.aceptaTerminos = 'Debes aceptar los términos y condiciones para crear la cuenta.';
 function esquemaRegistroMinimo(tipo) {
   const especificos = {};
@@ -223,6 +225,7 @@ function esquemaRegistroMinimo(tipo) {
   return z.object({
     tipoInstitucion: z.string(),
     nombreCompleto: texto(5, 150),
+    nit: z.string().trim().min(1).max(30),
     correo: CAMPOS_COMUNES.correo,
     password: CAMPOS_COMUNES.password,
     aceptaTerminos: z.literal(true),
@@ -256,11 +259,17 @@ function validarRegistro(body) {
         continue;
       }
       const campo = String(issue.path[0] ?? '_');
-      if (!errores[campo]) errores[campo] = MENSAJES_CAMPO[campo] || 'Valor no válido.';
+      if (!errores[campo]) errores[campo] = (campo === 'nit' ? MENSAJES_CAMPO.nitRegistro : MENSAJES_CAMPO[campo]) || 'Valor no válido.';
     }
     return { ok: false, errores };
   }
   const datos = resultado.data;
+  if (!nombreCompletoValido(datos.nombreCompleto)) {
+    return { ok: false, errores: { nombreCompleto: MENSAJES_CAMPO.nombreCompleto } };
+  }
+  if (!normalizarNitRegistro(datos.nit)) {
+    return { ok: false, errores: { nit: MENSAJES_CAMPO.nitRegistro } };
+  }
   if (contrasenaContieneUsuario(datos.password, datos.correo)) {
     return { ok: false, errores: { password: 'La contraseña no puede contener tu usuario de correo.' } };
   }
